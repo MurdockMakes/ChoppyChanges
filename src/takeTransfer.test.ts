@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createTakeTransferFile, parseTakeTransferFile } from './takeTransfer.ts';
+import { createTakeTransferFile, importTakeTransferFile, parseTakeTransferFile } from './takeTransfer.ts';
 import type { BankedTake } from './takeBank.ts';
 import { PROGRESSIONS } from './theory.ts';
 
@@ -51,7 +51,7 @@ test('one take exports progression, source, sax key, name, edited notes and reim
 });
 
 test('microphone audio survives a portable round trip byte for byte with replay timing', async () => {
-  const bytes = Uint8Array.from([0, 255, 42, 10, 13, 128, 99]);
+  const bytes = Uint8Array.from({ length: 40_001 }, (_, index) => (index * 73 + 19) % 256);
   const original = sampleTake({ audio: {
     blob: new Blob([bytes], { type: 'audio/webm' }), startBeat: 2.5, endBeat: 8.25, rate: 0.75,
   } });
@@ -83,7 +83,10 @@ test('note edits survive import with references mapped to the imported notes', a
 });
 
 test('whole-bank export imports multiple distinct takes, with and without audio', async () => {
-  const a = sampleTake();
+  const a = sampleTake({ audio: {
+    blob: new Blob([Uint8Array.from([1, 2, 255])], { type: 'audio/webm' }),
+    startBeat: 0, endBeat: 3, rate: 1,
+  } });
   const b = sampleTake({
     id: 'other-take', name: 'Blues piano', progressionId: 'blues-c', source: 'piano', saxKey: 'concert',
     notes: [{ id: 'other-note', pitch: 60, startBeat: 16.1, durationBeats: 0.4 }],
@@ -95,7 +98,8 @@ test('whole-bank export imports multiple distinct takes, with and without audio'
   assert.equal(first.length, 2);
   assert.deepEqual(first.map((take) => take.name), ['First chorus', 'Blues piano']);
   assert.equal(new Set(first.map((take) => take.id)).size, 2);
-  assert.ok(first.every((take) => take.audio === null));
+  assert.deepEqual(new Uint8Array(await first[0].audio!.blob.arrayBuffer()), Uint8Array.from([1, 2, 255]));
+  assert.equal(first[1].audio, null);
   assert.ok(first.every((take) => ![a.id, b.id].includes(take.id)));
   assert.ok(first.every((take, index) => take.id !== second[index].id), 'repeat imports must have fresh take IDs');
 });
@@ -107,7 +111,13 @@ test('damaged, unsupported and invalid files fail with useful errors', async () 
     ['broken JSON', new Blob(['{"format":'])],
     ['unsupported version', asFile({ ...valid, version: 999 })],
     ['unknown progression', asFile({ ...valid, takes: [{ ...valid.takes[0], progression: { ...valid.takes[0].progression, id: 'not-a-progression' } }] })],
+    ['mismatched progression', asFile({ ...valid, takes: [{ ...valid.takes[0], progression: { ...valid.takes[0].progression, chords: [{ ...valid.takes[0].progression.chords[0], name: 'B7' }, ...valid.takes[0].progression.chords.slice(1)] } }] })],
+    ['unknown source', asFile({ ...valid, takes: [{ ...valid.takes[0], source: 'server' }] })],
+    ['unknown sax key', asFile({ ...valid, takes: [{ ...valid.takes[0], saxKey: 'baritone' }] })],
+    ['empty take', asFile({ ...valid, takes: [{ ...valid.takes[0], notes: [], audio: null }] })],
     ['invalid note', asFile({ ...valid, takes: [{ ...valid.takes[0], notes: [{ id: 'n', pitch: 999, startBeat: 0, durationBeats: 1 }] }] })],
+    ['excessive take length', asFile({ ...valid, takes: [{ ...valid.takes[0], notes: [{ id: 'n', pitch: 60, startBeat: 1024, durationBeats: 1 }] }] })],
+    ['duplicate note IDs', asFile({ ...valid, takes: [{ ...valid.takes[0], notes: [valid.takes[0].notes[0], valid.takes[0].notes[0]] }] })],
     ['invalid audio', asFile({ ...valid, takes: [{ ...valid.takes[0], audio: { mimeType: 'audio/webm', startBeat: 0, endBeat: 1, rate: 1, dataBase64: 'not base64!' } }] })],
   ];
   for (const [label, file] of cases) {
@@ -115,4 +125,28 @@ test('damaged, unsupported and invalid files fail with useful errors', async () 
       error instanceof Error && error.message.trim().length >= 8, label);
   }
   await assert.rejects(parseTakeTransferFile(cases[2][1]), /version|unsupported/i);
+});
+
+test('a damaged second take rejects the whole import before opening the take bank', async () => {
+  const valid = JSON.parse(await (await createTakeTransferFile([sampleTake()])).text());
+  const file = asFile({ ...valid, takes: [valid.takes[0], { ...valid.takes[0], saxKey: 'invalid-key' }] });
+  await assert.rejects(importTakeTransferFile(file), /Take 2.*sax key/i);
+});
+
+test('decodable audio is required before any take is imported', async () => {
+  const original = sampleTake({ audio: {
+    blob: new Blob(['invalid media'], { type: 'audio/webm' }), startBeat: 0, endBeat: 1, rate: 1,
+  } });
+  const file = await createTakeTransferFile([original]);
+  const prior = Object.getOwnPropertyDescriptor(globalThis, 'AudioContext');
+  Object.defineProperty(globalThis, 'AudioContext', { configurable: true, value: class {
+    async decodeAudioData() { throw new Error('Codec rejected media'); }
+    async close() {}
+  } });
+  try {
+    await assert.rejects(importTakeTransferFile(file), /damaged or unsupported microphone audio.*No takes were imported/i);
+  } finally {
+    if (prior) Object.defineProperty(globalThis, 'AudioContext', prior);
+    else Reflect.deleteProperty(globalThis, 'AudioContext');
+  }
 });

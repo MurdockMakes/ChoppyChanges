@@ -10,6 +10,7 @@ export interface MeasureObservation {
   label: string;
   detail: string;
   noteIds: string[];
+  focusNoteId?: string;
   beat: number;
   bar: number;
 }
@@ -33,6 +34,8 @@ export interface AudioFrame {
   confidence: number;
   rms: number;
   clipped: boolean;
+  /** False when only amplitude was sampled; omitted for fully analyzed frame series. */
+  sampledPitch?: boolean;
 }
 
 export interface MicAudioAnalysis {
@@ -51,6 +54,15 @@ export interface MicAudioAnalysis {
   articulationObservations: MeasureObservation[];
 }
 
+export function unavailableMicAudio(reason: string): MicAudioAnalysis {
+  return {
+    reliable: false, reason, stableFrames: 0, noteFrames: 0, confidence: 0,
+    clipFraction: 0, voiceToNoise: null, intonationCents: null,
+    intonationNotes: 0, intonationObservations: [], articulationClear: 0,
+    articulationStarts: 0, articulationObservations: [],
+  };
+}
+
 const noteEnd = (note: NoteEvent) => note.startBeat + note.durationBeats;
 const barAt = (beat: number) => Math.floor(beat / BEATS_PER_BAR) + 1;
 const round = (value: number, decimals = 1) => Number(value.toFixed(decimals));
@@ -60,8 +72,8 @@ const median = (numbers: readonly number[]) => {
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 };
-const observation = (id: string, label: string, detail: string, notes: NoteEvent[], beat: number): MeasureObservation =>
-  ({ id, label, detail, noteIds: notes.map((note) => note.id), beat, bar: barAt(beat) });
+const observation = (id: string, label: string, detail: string, notes: NoteEvent[], beat: number, focusNoteId?: string): MeasureObservation =>
+  ({ id, label, detail, noteIds: notes.map((note) => note.id), ...(focusNoteId ? { focusNoteId } : {}), beat, bar: barAt(beat) });
 
 function cleanNotes(raw: readonly NoteEvent[]): NoteEvent[] {
   const ids = new Set<string>();
@@ -77,14 +89,15 @@ function cleanNotes(raw: readonly NoteEvent[]): NoteEvent[] {
 
 function chordLandings(notes: NoteEvent[], progression: Progression): SoloMeasure {
   const observations: MeasureObservation[] = [];
-  const end = notes.length ? Math.max(...notes.map(noteEnd)) : 0;
+  const seenBars = new Set<number>();
   let guide = 0;
-  for (let boundary = BEATS_PER_BAR; boundary <= end; boundary += BEATS_PER_BAR) {
+  for (const landed of notes) {
+    const boundary = Math.floor(landed.startBeat / BEATS_PER_BAR) * BEATS_PER_BAR;
+    if (boundary === 0 || landed.startBeat >= boundary + 1 || seenBars.has(boundary)) continue;
     const from = chordAtBeat(boundary - 0.001, progression);
     const to = chordAtBeat(boundary, progression);
     if (from.name === to.name) continue;
-    const landed = notes.find((note) => note.startBeat >= boundary && note.startBeat < boundary + 1);
-    if (!landed) continue;
+    seenBars.add(boundary);
     const pc = pitchClass(landed.pitch);
     const isGuide = pc === to.third || pc === to.seventh;
     if (isGuide) guide += 1;
@@ -106,20 +119,22 @@ function chordLandings(notes: NoteEvent[], progression: Progression): SoloMeasur
 function tensionResolution(notes: NoteEvent[], progression: Progression): SoloMeasure {
   const observations: MeasureObservation[] = [];
   const finalEnd = notes.length ? Math.max(...notes.map(noteEnd)) : 0;
+  const chordTones = notes.filter((note) => {
+    const target = chordAtBeat(note.startBeat, progression);
+    const pc = pitchClass(note.pitch);
+    return pc === target.root || pc === target.third || pc === target.fifth || pc === target.seventh;
+  });
+  let targetIndex = 0;
   let resolved = 0;
   let open = 0;
   const times: number[] = [];
-  for (const [index, note] of notes.entries()) {
+  for (const note of notes) {
     const chord = chordAtBeat(note.startBeat, progression);
     const tension = chord.tensions.find((item) => item.pitchClass === pitchClass(note.pitch));
     if (!tension) continue;
-    const arrival = notes.slice(index + 1).find((candidate) => {
-      if (candidate.startBeat - note.startBeat > 2) return false;
-      const target = chordAtBeat(candidate.startBeat, progression);
-      const pc = pitchClass(candidate.pitch);
-      return pc === target.root || pc === target.third || pc === target.fifth || pc === target.seventh;
-    });
-    const gap = arrival ? arrival.startBeat - note.startBeat : null;
+    while (targetIndex < chordTones.length && chordTones[targetIndex].startBeat <= note.startBeat) targetIndex += 1;
+    const arrival = chordTones[targetIndex];
+    const gap = arrival && arrival.startBeat - note.startBeat <= 2 ? arrival.startBeat - note.startBeat : null;
     if (gap !== null && gap > 0 && gap <= 2) {
       resolved += 1;
       times.push(gap);
@@ -173,14 +188,20 @@ function phraseSpace(notes: NoteEvent[]): SoloMeasure {
   const observations: MeasureObservation[] = [];
   let space = 0;
   let pauses = 0;
+  let latestEnd = notes[0] ? noteEnd(notes[0]) : 0;
+  let latestNote = notes[0];
   for (let index = 1; index < notes.length; index += 1) {
-    const before = notes[index - 1];
     const after = notes[index];
-    const gap = after.startBeat - noteEnd(before);
-    if (gap < 0.5) continue;
-    pauses += 1;
-    space += gap;
-    observations.push(observation(`space-${before.id}-${after.id}`, `${round(gap)}-beat pause`, `There are ${round(gap)} beats between ${formatPosition(noteEnd(before))} and ${formatPosition(after.startBeat)}.`, [before, after], noteEnd(before)));
+    const gap = after.startBeat - latestEnd;
+    if (gap >= 0.5) {
+      pauses += 1;
+      space += gap;
+      observations.push(observation(`space-${latestNote.id}-${after.id}`, `${round(gap)}-beat pause`, `There are ${round(gap)} beats between ${formatPosition(latestEnd)} and ${formatPosition(after.startBeat)}.`, [latestNote, after], latestEnd));
+    }
+    if (noteEnd(after) > latestEnd) {
+      latestEnd = noteEnd(after);
+      latestNote = after;
+    }
   }
   const span = notes.length ? Math.max(0, Math.max(...notes.map(noteEnd)) - notes[0].startBeat) : 0;
   const status = notes.length >= 6 && span >= 8 ? 'available' : notes.length >= 3 && span >= 4 ? 'limited' : 'unavailable';
@@ -201,14 +222,15 @@ function motifDevelopment(notes: NoteEvent[]): SoloMeasure {
   const observations: MeasureObservation[] = [];
   let repeats = 0;
   let variations = 0;
-  const usedStarts = new Set<number>();
+  const usedNotes = new Set<number>();
+  const lookahead = 64;
   for (let start = 0; start + 5 < notes.length; start += 1) {
-    if (usedStarts.has(start)) continue;
+    if ([start, start + 1, start + 2].some((index) => usedNotes.has(index))) continue;
     const first = notes.slice(start, start + 3);
     const ia = [intervalShape(first[0], first[1]), intervalShape(first[1], first[2])];
     const ra = [first[1].startBeat - first[0].startBeat, first[2].startBeat - first[1].startBeat];
-    for (let later = start + 3; later + 2 < notes.length; later += 1) {
-      if (usedStarts.has(later)) continue;
+    for (let later = start + 3; later + 2 < notes.length && later <= start + lookahead; later += 1) {
+      if ([later, later + 1, later + 2].some((index) => usedNotes.has(index))) continue;
       const second = notes.slice(later, later + 3);
       const ib = [intervalShape(second[0], second[1]), intervalShape(second[1], second[2])];
       const rb = [second[1].startBeat - second[0].startBeat, second[2].startBeat - second[1].startBeat];
@@ -217,9 +239,8 @@ function motifDevelopment(notes: NoteEvent[]): SoloMeasure {
       if (!similar) continue;
       const varied = ia.some((interval, index) => interval !== ib[index]) || ra.some((gap, index) => Math.abs(gap - rb[index]) > 0.125);
       if (varied) variations += 1; else repeats += 1;
-      usedStarts.add(start);
-      usedStarts.add(later);
-      observations.push(observation(`motif-${first[0].id}-${second[0].id}`, `Bars ${barAt(first[0].startBeat)} → ${barAt(second[0].startBeat)} · ${varied ? 'variation' : 'return'}`, `A three-note shape at ${formatPosition(first[0].startBeat)} returns at ${formatPosition(second[0].startBeat)} with ${varied ? 'a small interval or timing change' : 'the same interval and timing shape'}.`, [...first, ...second], second[0].startBeat));
+      for (const index of [start, start + 1, start + 2, later, later + 1, later + 2]) usedNotes.add(index);
+      observations.push(observation(`motif-${first[0].id}-${second[0].id}`, `Bars ${barAt(first[0].startBeat)} → ${barAt(second[0].startBeat)} · ${varied ? 'variation' : 'return'}`, `A three-note shape at ${formatPosition(first[0].startBeat)} returns at ${formatPosition(second[0].startBeat)} with ${varied ? 'a small interval or timing change' : 'the same interval and timing shape'}.`, [...first, ...second], second[0].startBeat, second[0].id));
       break;
     }
   }
@@ -228,7 +249,7 @@ function motifDevelopment(notes: NoteEvent[]): SoloMeasure {
   return {
     id: 'motif-development', title: 'Motif development', status,
     value: status === 'unavailable' ? 'Too few notes for motif comparison' : `${repeats + variations} related three-note ${repeats + variations === 1 ? 'return' : 'returns'} · ${variations} varied`,
-    definition: 'Compare non-overlapping three-note groups. A return keeps both interval directions, changes each interval by no more than two semitones, and changes each onset gap by no more than ½ beat. A variation changes at least one interval or gap.',
+    definition: 'Compare non-overlapping three-note groups within the following 64 notes. A return keeps both interval directions, changes each interval by no more than two semitones, and changes each onset gap by no more than ½ beat. A variation changes at least one interval or gap.',
     threshold: 'Available with at least 8 notes spanning 8 beats; limited with 6–7 notes or a shorter span; unavailable below 6 notes. Each group is used at most once.',
     sample: `${notes.length} notes · ${round(span)}-beat onset span`,
     observations,
@@ -243,8 +264,9 @@ export function analyzeAudioFrames(rawNotes: readonly NoteEvent[], rawFrames: re
   const notes = cleanNotes(rawNotes);
   const frames = rawFrames.filter((frame) => Number.isFinite(frame.beat) && frame.beat >= 0 && Number.isFinite(frame.rms) && frame.rms >= 0 && Number.isFinite(frame.confidence) && frame.confidence >= 0 && frame.confidence <= 1).slice().sort((a, b) => a.beat - b.beat);
   const eligible = notes.filter((note) => note.durationBeats >= 0.35);
-  const during = frames.filter((frame) => eligible.some((note) => frame.beat >= note.startBeat + 0.1 && frame.beat <= noteEnd(note) - 0.08));
+  const during = frames.filter((frame) => frame.sampledPitch !== false && eligible.some((note) => frame.beat >= note.startBeat + 0.1 && frame.beat <= noteEnd(note) - 0.08));
   const stable = during.filter(usableFrame);
+  const matched = stable.filter((frame) => eligible.some((note) => frame.beat >= note.startBeat + 0.1 && frame.beat <= noteEnd(note) - 0.08 && Math.abs(centsFrom(frame.frequencyHz!, note.pitch)) <= 150));
   const stableConfidence = median(stable.map((frame) => frame.confidence));
   const clipFraction = frames.length ? frames.filter((frame) => frame.clipped).length / frames.length : 1;
   const offNote = frames.filter((frame) => !notes.some((note) => frame.beat >= note.startBeat && frame.beat <= noteEnd(note)));
@@ -256,6 +278,7 @@ export function analyzeAudioFrames(rawNotes: readonly NoteEvent[], rawFrames: re
   if (eligible.length < 4) reason = `Only ${eligible.length} notes last at least 0.35 beat; 4 are required.`;
   else if (stable.length < 12) reason = `Only ${stable.length} stable audio frames; 12 are required.`;
   else if (coverage < 0.6) reason = `Stable pitch covers ${Math.round(coverage * 100)}% of note frames; 60% is required.`;
+  else if (matched.length / stable.length < 0.55) reason = `Only ${Math.round(matched.length / stable.length * 100)}% of stable frames match the edited notes within 150 cents; 55% is required.`;
   else if (stableConfidence < 0.85) reason = `Median pitch confidence is ${round(stableConfidence, 2)}; 0.85 is required.`;
   else if (clipFraction > 0.01) reason = `${Math.round(clipFraction * 100)}% of frames clip; at most 1% is allowed.`;
   else if (voiceToNoise !== null && voiceToNoise < 3) reason = `Voiced audio is ${round(voiceToNoise)}× the quiet-level audio; 3× is required.`;
@@ -296,8 +319,13 @@ export function analyzeAudioFrames(rawNotes: readonly NoteEvent[], rawFrames: re
 }
 
 /** Decodes and analyzes a local Blob only. No network request is made. */
-export async function analyzeMicAudio(blob: Blob, notes: readonly NoteEvent[], startBeat: number, rate: number): Promise<MicAudioAnalysis> {
+function checkAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw signal.reason ?? new DOMException('Audio analysis cancelled.', 'AbortError');
+}
+
+export async function analyzeMicAudio(blob: Blob, notes: readonly NoteEvent[], startBeat: number, rate: number, signal?: AbortSignal): Promise<MicAudioAnalysis> {
   if (!blob.size || !Number.isFinite(startBeat) || !Number.isFinite(rate) || rate <= 0) throw new Error('Microphone audio is empty or has invalid timing.');
+  checkAborted(signal);
   const Context = globalThis.AudioContext;
   if (!Context) throw new Error('This browser cannot decode microphone audio for feedback.');
   const context = new Context();
@@ -306,10 +334,17 @@ export async function analyzeMicAudio(blob: Blob, notes: readonly NoteEvent[], s
     const sampleRate = decoded.sampleRate;
     const channels = Array.from({ length: decoded.numberOfChannels }, (_, index) => decoded.getChannelData(index));
     if (!channels.length || decoded.length < 1024) throw new Error('Microphone audio is too short to analyze.');
+    checkAborted(signal);
+    const eligible = cleanNotes(notes).filter((note) => note.durationBeats >= 0.35);
     const windowSize = Math.min(8192, decoded.length);
     const hop = Math.max(1, Math.round(sampleRate * 0.08));
+    const hopBeats = hop / sampleRate * BPM / 60 * rate;
+    const estimatedInteriorFrames = eligible.reduce((total, note) => total + Math.max(0, note.durationBeats - 0.18) / hopBeats, 0);
+    const pitchStride = Math.max(1, Math.ceil(estimatedInteriorFrames / 480));
+    let interiorIndex = 0;
     const frames: AudioFrame[] = [];
     for (let offset = 0; offset + windowSize <= decoded.length; offset += hop) {
+      checkAborted(signal);
       const samples = new Float32Array(windowSize);
       let power = 0;
       let peaks = 0;
@@ -321,13 +356,19 @@ export async function analyzeMicAudio(blob: Blob, notes: readonly NoteEvent[], s
         power += value * value;
         if (Math.abs(value) >= 0.995) peaks += 1;
       }
-      const estimate = detectPitch(samples, sampleRate);
+      const beat = startBeat + ((offset + windowSize / 2) / sampleRate) * BPM / 60 * rate;
+      // Decode level across the full recording, but run the costly pitch detector
+      // only in a bounded sample of stable note interiors. RMS stays complete.
+      const inNote = eligible.some((note) => beat >= note.startBeat + 0.1 && beat <= noteEnd(note) - 0.08);
+      const sampledPitch = inNote && interiorIndex++ % pitchStride === 0;
+      const estimate = sampledPitch ? detectPitch(samples, sampleRate) : null;
       frames.push({
-        beat: startBeat + ((offset + windowSize / 2) / sampleRate) * BPM / 60 * rate,
+        beat,
         frequencyHz: estimate?.frequencyHz ?? null,
         confidence: estimate?.confidence ?? 0,
         rms: Math.sqrt(power / windowSize),
         clipped: peaks / windowSize > 0.005,
+        sampledPitch,
       });
       // Keep the controls responsive while longer local recordings are analyzed.
       if (frames.length % 24 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -343,23 +384,25 @@ export function buildSoloFeedback(rawNotes: readonly NoteEvent[], progression: P
   const measures = [chordLandings(notes, progression), tensionResolution(notes, progression), rhythmicVariety(notes), phraseSpace(notes), motifDevelopment(notes)];
   const saxReason = source !== 'mic' ? 'Intonation and articulation use original local sax microphone audio only.' : audio?.reason ?? 'Original microphone audio is unavailable or still being analyzed.';
   const audioReady = source === 'mic' && audio?.reliable;
+  const intonationReady = audioReady && audio.intonationCents !== null;
+  const articulationReady = audioReady && audio.articulationStarts >= 3;
   measures.push({
     id: 'intonation', title: 'Intonation',
-    status: audioReady && audio.intonationCents !== null ? 'available' : 'unavailable',
-    value: audioReady && audio.intonationCents !== null ? `Median ${Math.round(audio.intonationCents)} cents from edited notes` : 'Unavailable',
-    definition: 'For each sustained note, take the median frequency of stable interior audio frames, compare it with the edited equal-tempered note pitch in cents, then report the median absolute note offset. This measures audio-to-transcription alignment, not musical taste.',
-    threshold: 'Audio gate: at least 4 notes ≥0.35 beat, 12 stable frames, ≥60% stable frame coverage, median detector confidence ≥0.85, ≤1% clipped frames, voiced RMS ≥0.02, and voiced-to-quiet level ≥3× when a quiet baseline exists. Intonation also needs ≥3 notes with ≥2 matching frames within ±150 cents.',
-    sample: audioReady ? `${audio.intonationNotes} matched notes · ${audio.stableFrames}/${audio.noteFrames} stable frames` : saxReason,
-    observations: audioReady ? audio.intonationObservations : [],
+    status: intonationReady ? 'available' : 'unavailable',
+    value: intonationReady ? `Median ${Math.round(audio.intonationCents!)} cents from edited notes` : 'Unavailable',
+    definition: 'For each sustained note, take the median frequency of sampled stable interior audio frames, compare it with the edited equal-tempered note pitch in cents, then report the median absolute note offset. At most 480 pitch frames are sampled across a take. This measures audio-to-transcription alignment, not musical taste.',
+    threshold: 'Audio gate: at least 4 notes ≥0.35 beat, 12 stable frames, ≥60% stable frame coverage, ≥55% of stable frames within ±150 cents of an edited note, median detector confidence ≥0.85, ≤1% clipped frames, voiced RMS ≥0.02, and voiced-to-quiet level ≥3× when a quiet baseline exists. Intonation also needs ≥3 notes with ≥2 matching frames.',
+    sample: audioReady ? `${audio.intonationNotes} matched notes · ${audio.stableFrames}/${audio.noteFrames} stable frames${intonationReady ? '' : ' · need 3 matched notes'}` : saxReason,
+    observations: intonationReady ? audio.intonationObservations : [],
   });
   measures.push({
     id: 'articulation', title: 'Articulation',
-    status: audioReady && audio.articulationStarts >= 3 ? 'available' : 'unavailable',
-    value: audioReady && audio.articulationStarts >= 3 ? `${audio.articulationClear} of ${audio.articulationStarts} starts with a level rise` : 'Unavailable',
+    status: articulationReady ? 'available' : 'unavailable',
+    value: articulationReady ? `${audio.articulationClear} of ${audio.articulationStarts} starts with a level rise` : 'Unavailable',
     definition: 'Compare median microphone RMS in the 0.3–0.06 beats before each note start with 0.02–0.25 beats after it. Count starts where the level rises at least 1.8× and reaches 0.02 RMS. This describes onset contrast, not tongue or breath technique.',
     threshold: 'The same local audio gate as intonation applies. Articulation also needs ≥3 starts with at least 2 audio frames on each side. Missing or noisy audio stays unavailable.',
     sample: audioReady ? `${audio.articulationStarts} assessable starts · ${audio.stableFrames}/${audio.noteFrames} stable frames${audio.articulationStarts < 3 ? ' · need 3 starts' : ''}` : saxReason,
-    observations: audioReady ? audio.articulationObservations : [],
+    observations: articulationReady ? audio.articulationObservations : [],
   });
   return { measures };
 }

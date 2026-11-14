@@ -104,7 +104,7 @@ export function loadAllBankedTakes(): Promise<BankedTake[]> {
 }
 
 export async function saveBankedTake(take: BankedTake): Promise<void> {
-  await withStore<IDBValidKey>('readwrite', (store) => store.put(take));
+  await withStore<IDBValidKey>('readwrite', (store) => store.add(take));
 }
 
 /** Adds an entire imported file in one transaction, without replacing any saved take. */
@@ -112,12 +112,24 @@ export async function addBankedTakes(takes: readonly BankedTake[]): Promise<void
   if (takes.length === 0) return;
   const db = await openBank();
   await new Promise<void>((resolve, reject) => {
-    const transaction = db.transaction(STORE, 'readwrite');
-    const store = transaction.objectStore(STORE);
-    for (const take of takes) store.add(take);
+    let transaction: IDBTransaction;
+    try {
+      transaction = db.transaction(STORE, 'readwrite');
+    } catch (error) {
+      db.close();
+      reject(error);
+      return;
+    }
     transaction.oncomplete = () => { db.close(); resolve(); };
     transaction.onerror = () => { db.close(); reject(transaction.error ?? new Error('Could not import takes. No takes were added.')); };
     transaction.onabort = () => { db.close(); reject(transaction.error ?? new Error('Could not import takes. No takes were added.')); };
+    try {
+      const store = transaction.objectStore(STORE);
+      for (const take of takes) store.add(take);
+    } catch (error) {
+      transaction.abort();
+      reject(error);
+    }
   });
 }
 

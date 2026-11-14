@@ -97,3 +97,17 @@ test('recorded audio follows beat seeks and playback speed, then releases its UR
   replay.stop();
   assert.equal(releases, 1);
 });
+
+test('recorded-audio playback failures reach the caller', async () => {
+  let errors = 0;
+  const audio = {
+    currentTime: 0, playbackRate: 1, preload: '', preservesPitch: false, muted: false,
+    play: () => Promise.reject(new Error('Media decode failed')),
+    pause: () => {},
+  } as unknown as HTMLAudioElement;
+  const replay = new RecordedAudioReplay(audio, 0, 1, () => {}, () => { errors += 1; });
+  replay.start(0, 1);
+  await Promise.resolve();
+  assert.equal(errors, 1);
+  replay.stop();
+});

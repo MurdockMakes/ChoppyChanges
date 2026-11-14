@@ -86,17 +86,20 @@ export class RecordedAudioReplay {
   private readonly recordedFromBeat: number;
   private readonly recordedRate: number;
   private readonly release: () => void;
+  private readonly onPlaybackError?: (error: unknown) => void;
 
   constructor(
     audio: HTMLAudioElement,
     recordedFromBeat: number,
     recordedRate: number,
     release: () => void,
+    onPlaybackError?: (error: unknown) => void,
   ) {
     this.audio = audio;
     this.recordedFromBeat = recordedFromBeat;
     this.recordedRate = recordedRate;
     this.release = release;
+    this.onPlaybackError = onPlaybackError;
     this.audio.preload = 'auto';
     this.audio.preservesPitch = true;
   }
@@ -106,7 +109,13 @@ export class RecordedAudioReplay {
     this.audio.currentTime = Math.max(0, (beat - this.recordedFromBeat) * (60 / BPM) / this.recordedRate);
     if (this.playing) {
       this.audio.muted = beat < this.recordedFromBeat;
-      void this.audio.play().catch(() => {});
+      try {
+        void this.audio.play().catch((error: unknown) => {
+          if (this.playing && !this.disposed) this.onPlaybackError?.(error);
+        });
+      } catch (error) {
+        if (this.playing && !this.disposed) this.onPlaybackError?.(error);
+      }
     } else this.audio.pause();
   }
 

@@ -1,4 +1,5 @@
 import { chordAtBeat, formatPosition, spellNoteWithOctave, type NoteEvent, type Progression } from './theory';
+import { MAX_PORTABLE_NOTES, MAX_PORTABLE_TAKE_BEATS } from './takeTransfer';
 import './TranscriptionEditor.css';
 
 export interface TranscriptionEditorProps {
@@ -19,18 +20,20 @@ function roundHundredth(value: number) {
 
 export default function TranscriptionEditor({ notes, onChange, visible, origin = 'mic', progression }: TranscriptionEditorProps) {
   if (!visible) return null;
+  const lastEnd = notes.reduce((maximum, note) => Math.max(maximum, note.startBeat + note.durationBeats), 0);
+  const canAdd = notes.length < MAX_PORTABLE_NOTES && lastEnd <= MAX_PORTABLE_TAKE_BEATS - 0.05;
 
   function updateNote(id: string, change: Partial<NoteEvent>) {
     onChange(notes.map((note) => note.id === id ? { ...note, ...change } : note));
   }
 
   function addNote() {
-    const lastEnd = notes.reduce((maximum, note) => Math.max(maximum, note.startBeat + note.durationBeats), 0);
+    if (!canAdd) return;
     onChange([...notes, {
       id: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       pitch: 60,
       startBeat: roundHundredth(lastEnd),
-      durationBeats: 0.5,
+      durationBeats: Math.min(0.5, roundHundredth(MAX_PORTABLE_TAKE_BEATS - lastEnd)),
     }]);
   }
 
@@ -41,7 +44,7 @@ export default function TranscriptionEditor({ notes, onChange, visible, origin =
           <p className="eyebrow">{origin === 'mic' ? 'MICROPHONE TRANSCRIPTION' : 'EXAMPLE NOTE EVENTS'}</p>
           <h3>Correct the notes</h3>
         </div>
-        <button type="button" onClick={addNote}>+ Add note</button>
+        <button type="button" onClick={addNote} disabled={!canAdd}>+ Add note</button>
       </div>
       <p className="transcription-editor-help">{origin === 'mic' ? 'Detected pitches are in concert pitch.' : 'These example notes are in concert pitch.'} Adjust pitch or timing before using the phrase evidence; uncertain notes can be removed.</p>
       {notes.length === 0 ? (
@@ -81,11 +84,12 @@ export default function TranscriptionEditor({ notes, onChange, visible, origin =
                         aria-label={`Start beat for note ${index + 1}`}
                         type="number"
                         min="0"
+                        max={MAX_PORTABLE_TAKE_BEATS - note.durationBeats}
                         step="0.05"
                         value={roundHundredth(note.startBeat)}
                         onChange={(event) => {
                           const value = event.target.valueAsNumber;
-                          if (Number.isFinite(value) && value >= 0) updateNote(note.id, { startBeat: roundHundredth(value) });
+                          if (Number.isFinite(value) && value >= 0 && value + note.durationBeats <= MAX_PORTABLE_TAKE_BEATS) updateNote(note.id, { startBeat: roundHundredth(value) });
                         }}
                       />
                     </td>
@@ -94,11 +98,12 @@ export default function TranscriptionEditor({ notes, onChange, visible, origin =
                         aria-label={`Length in beats for note ${index + 1}`}
                         type="number"
                         min="0.05"
+                        max={MAX_PORTABLE_TAKE_BEATS - note.startBeat}
                         step="0.05"
                         value={roundHundredth(note.durationBeats)}
                         onChange={(event) => {
                           const value = event.target.valueAsNumber;
-                          if (Number.isFinite(value) && value >= 0.05) updateNote(note.id, { durationBeats: roundHundredth(value) });
+                          if (Number.isFinite(value) && value >= 0.05 && note.startBeat + value <= MAX_PORTABLE_TAKE_BEATS) updateNote(note.id, { durationBeats: roundHundredth(value) });
                         }}
                       />
                     </td>

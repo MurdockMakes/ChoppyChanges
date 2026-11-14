@@ -18,6 +18,8 @@ import { RecordedAudioReplay, TakeReplay, takeEndBeat } from './takeReplay';
 import { deleteBankedTake, diffNoteEdits, listBankedTakes, loadAllBankedTakes, loadBankedTake, saveBankedTake, type BankedTakeSummary, type MicAudioTake, type NoteEdit } from './takeBank';
 import { createTakeTransferFile, importTakeTransferFile, TAKE_FILE_EXTENSION } from './takeTransfer';
 import { buildNoteEvidenceIndex } from './noteEvidence';
+import { analyzeMicAudio, buildSoloFeedback, unavailableMicAudio, type MicAudioAnalysis } from './soloFeedback';
+import SoloFeedback from './SoloFeedbackPanel';
 
 type PassageTarget = Pick<Resolution, 'startBeat' | 'endBeat' | 'title' | 'explanation'>;
 
@@ -31,12 +33,14 @@ export default function App() {
   const [replayKind, setReplayKind] = useState<'full' | 'passage' | null>(null);
   const [fullReplayRate, setFullReplayRate] = useState(1);
   const [replaySound, setReplaySound] = useState<'original' | 'notes'>('original');
+  const [replayError, setReplayError] = useState('');
   const [saxKey, setSaxKey] = useState<SaxKey>('concert');
   const [passCount, setPassCount] = useState('1');
   const [runStartBeat, setRunStartBeat] = useState(0);
   const [runPasses, setRunPasses] = useState(1);
   const [micAudio, setMicAudio] = useState<MicAudioTake | null>(null);
   const [micAudioFinalizing, setMicAudioFinalizing] = useState(false);
+  const [micAudioAnalysis, setMicAudioAnalysis] = useState<MicAudioAnalysis | null>(null);
   const [bankedTakes, setBankedTakes] = useState<BankedTakeSummary[]>([]);
   const [bankName, setBankName] = useState('');
   const [bankStatus, setBankStatus] = useState('');
@@ -108,6 +112,7 @@ export default function App() {
   const coachContext = useMemo(() => buildCoachContext(take.notes, progression, resolutions), [take.notes, progression, resolutions]);
   const phraseEvidence = useMemo(() => transport.mode === 'recording' ? [] : coachContext.summary.evidence, [coachContext, transport.mode]);
   const noteEvidenceIndex = useMemo(() => buildNoteEvidenceIndex(take.notes, phraseEvidence), [take.notes, phraseEvidence]);
+  const soloFeedback = useMemo(() => buildSoloFeedback(take.notes, progression, take.source, micAudioAnalysis), [take.notes, progression, take.source, micAudioAnalysis]);
   const [coachPlan, setCoachPlan] = useState<CoachPlan | null>(null);
   const [coachOrigin, setCoachOrigin] = useState<'gemini' | 'local' | null>(null);
   const [coachLoading, setCoachLoading] = useState(false);
@@ -135,6 +140,21 @@ export default function App() {
     });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setMicAudioAnalysis(null);
+    if (take.source === 'mic' && micAudio && !micAudioFinalizing && transport.mode !== 'recording') {
+      void analyzeMicAudio(micAudio.blob, take.notes, micAudio.startBeat, micAudio.rate, controller.signal)
+        .then((analysis) => { if (!controller.signal.aborted) setMicAudioAnalysis(analysis); })
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted) setMicAudioAnalysis(unavailableMicAudio(
+            error instanceof Error ? error.message : 'Original audio could not be analyzed locally.',
+          ));
+        });
+    }
+    return () => controller.abort();
+  }, [take.notes, take.source, micAudio, micAudioFinalizing, transport.mode === 'recording']);
 
   useEffect(() => {
     if (transport.mode !== 'stopped' || !replayKindRef.current) return;
@@ -232,17 +252,19 @@ export default function App() {
     if (!source || (take.notes.length === 0 && !micAudio) || transport.modeRef.current !== 'stopped' || micAudioFinalizing || bankBusy || !bankAvailable) return;
     const name = bankName.trim().slice(0, 80) || `${progression.label} ${source === 'mic' ? 'sax' : source} take ${bankedTakes.length + 1}`;
     setBankBusy(true);
+    setBankError(false);
     setBankStatus('Saving take…');
     try {
       await saveBankedTake({
         id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
         name, progressionId: progression.id, source, saxKey,
-        notes: take.notes.map((note) => ({ ...note })), audio: micAudio, savedAt: Date.now(),
+        notes: take.notes.map((note) => ({ ...note })), edits: noteEdits.map((edit) => ({ ...edit })), audio: micAudio, savedAt: Date.now(),
       });
       setBankedTakes(await listBankedTakes());
       setBankName('');
       setBankStatus(`Saved “${name}” to this browser.`);
     } catch (error) {
+      setBankError(true);
       setBankStatus(error instanceof Error ? error.message : 'Could not save this take.');
     } finally {
       setBankBusy(false);
@@ -252,6 +274,7 @@ export default function App() {
   async function loadFromBank(id: string) {
     if (transport.modeRef.current !== 'stopped' || mic.requesting || micAudioFinalizing || bankBusy) return;
     setBankBusy(true);
+    setBankError(false);
     setBankStatus('Loading take…');
     try {
       const saved = await loadBankedTake(id);
@@ -261,7 +284,7 @@ export default function App() {
       fullCursorArmedRef.current = false;
       invalidateCoach();
       if (saved.progressionId !== progression.id) {
-        takesByProgressionRef.current[progression.id] = { notes: take.notes.map((note) => ({ ...note })), source: take.source, audio: micAudio };
+        takesByProgressionRef.current[progression.id] = { notes: take.notes.map((note) => ({ ...note })), source: take.source, audio: micAudio, edits: noteEdits };
         setProgressionId(saved.progressionId);
         setRunStartBeat(0);
         setRunPasses(1);
@@ -272,6 +295,7 @@ export default function App() {
       recordingInputRef.current = null;
       setMicLivePitch(null);
       setMicAudio(saved.audio);
+      setNoteEdits(saved.edits ?? []);
       setReplaySound('original');
       setSaxKey(saved.saxKey);
       setSelectedEvidenceId(null);
@@ -280,6 +304,7 @@ export default function App() {
       take.restoreTake(saved.notes, saved.source);
       setBankStatus(`Loaded “${saved.name}”.`);
     } catch (error) {
+      setBankError(true);
       setBankStatus(error instanceof Error ? error.message : 'Could not load this take.');
     } finally {
       setBankBusy(false);
@@ -289,13 +314,60 @@ export default function App() {
   async function removeFromBank(item: BankedTakeSummary) {
     if (bankBusy || !window.confirm(`Delete “${item.name}” from the take bank?`)) return;
     setBankBusy(true);
+    setBankError(false);
     try {
       await deleteBankedTake(item.id);
       setBankedTakes(await listBankedTakes());
       setBankStatus(`Deleted “${item.name}”.`);
     } catch (error) {
+      setBankError(true);
       setBankStatus(error instanceof Error ? error.message : 'Could not delete this take.');
     } finally {
+      setBankBusy(false);
+    }
+  }
+
+  async function exportFromBank(item?: BankedTakeSummary) {
+    if (bankBusy || bankLoading || !bankAvailable || transport.modeRef.current !== 'stopped' || micAudioFinalizing) return;
+    setBankBusy(true);
+    setBankError(false);
+    setBankStatus('Preparing take file…');
+    try {
+      const records = item ? [await loadBankedTake(item.id)] : await loadAllBankedTakes();
+      if (records.some((record) => !record)) throw new Error('That saved take is no longer available.');
+      const file = await createTakeTransferFile(records as NonNullable<typeof records[number]>[]);
+      const url = URL.createObjectURL(file);
+      const link = document.createElement('a');
+      const base = item ? item.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'take' : 'take-bank';
+      link.href = url;
+      link.download = `${base}${TAKE_FILE_EXTENSION}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+      setBankStatus(item ? `Downloaded “${item.name}” as a take file.` : `Downloaded ${records.length} saved takes as one take file.`);
+    } catch (error) {
+      setBankError(true);
+      setBankStatus(error instanceof Error ? error.message : 'Could not export the take file.');
+    } finally {
+      setBankBusy(false);
+    }
+  }
+
+  async function importIntoBank(file: File | undefined) {
+    if (!file || bankBusy || !bankAvailable || transport.modeRef.current !== 'stopped' || mic.requesting || micAudioFinalizing) return;
+    setBankBusy(true);
+    setBankError(false);
+    setBankStatus(`Checking “${file.name}”…`);
+    try {
+      const imported = await importTakeTransferFile(file);
+      setBankedTakes(await listBankedTakes());
+      setBankStatus(`Imported ${imported.length} ${imported.length === 1 ? 'take' : 'takes'}. Choose Load to replay or edit.`);
+    } catch (error) {
+      setBankError(true);
+      setBankStatus(error instanceof Error ? error.message : 'Could not import this take file.');
+    } finally {
+      if (importInputRef.current) importInputRef.current.value = '';
       setBankBusy(false);
     }
   }
@@ -315,10 +387,15 @@ export default function App() {
 
   async function startReplay(kind: 'full' | 'passage', notes: NoteEvent[], fromBeat: number, rate: number, untilBeat: number) {
     clearReplaySession();
+    setReplayError('');
     const session = take.source === 'mic' && micAudio && replaySound === 'original'
       ? (() => {
           const url = URL.createObjectURL(micAudio.blob);
-          return new RecordedAudioReplay(new Audio(url), micAudio.startBeat, micAudio.rate, () => URL.revokeObjectURL(url));
+          return new RecordedAudioReplay(new Audio(url), micAudio.startBeat, micAudio.rate, () => URL.revokeObjectURL(url), () => {
+            setReplaySound('notes');
+            setReplayError('Original audio could not play. Note preview is selected; replay the take to hear it.');
+            stopReplay();
+          });
         })()
       : new TakeReplay(notes, transport.playNote, transport.stopTimed);
     replaySessionRef.current = session;
@@ -335,7 +412,10 @@ export default function App() {
       if (session instanceof RecordedAudioReplay) session.seek(transport.getBeat(), rate);
       else session.start(transport.getBeat(), rate);
     } catch {
-      if (startId === replayStartIdRef.current) stopReplay();
+      if (startId === replayStartIdRef.current) {
+        setReplayError('Replay could not start. Try the note preview or another take.');
+        stopReplay();
+      }
     }
   }
 
@@ -409,10 +489,11 @@ export default function App() {
     clearReplaySession();
     fullCursorArmedRef.current = false;
     invalidateCoach();
-    takesByProgressionRef.current[progression.id] = { notes: take.notes.map((note) => ({ ...note })), source: take.source, audio: micAudio };
+    takesByProgressionRef.current[progression.id] = { notes: take.notes.map((note) => ({ ...note })), source: take.source, audio: micAudio, edits: noteEdits };
     const saved = takesByProgressionRef.current[nextId];
     micCaptureEpochRef.current += 1;
     setMicAudio(saved?.audio ?? null);
+    setNoteEdits(saved?.edits ?? []);
     mic.stop();
     micSegmenterRef.current.reset();
     recordingInputRef.current = null;
@@ -457,6 +538,15 @@ export default function App() {
     transport.seek(note.startBeat);
   }
 
+  function selectFeedbackNote(id: string) {
+    selectNote(id);
+    requestAnimationFrame(() => {
+      const detail = document.getElementById('selected-passage');
+      detail?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      detail?.focus({ preventScroll: true });
+    });
+  }
+
   function selectCoachEvidence(id: string) {
     selectEvidence(id, null, true);
   }
@@ -476,6 +566,7 @@ export default function App() {
     invalidateCoach();
     micCaptureEpochRef.current += 1;
     setMicAudio(null);
+    setNoteEdits([]);
     recordingInputRef.current = 'midi';
     setPracticeOf(practiceTarget);
     setSelectedEvidenceId(null);
@@ -490,6 +581,7 @@ export default function App() {
     invalidateCoach();
     micCaptureEpochRef.current += 1;
     setMicAudio(null);
+    setNoteEdits([]);
     recordingInputRef.current = 'piano';
     setPracticeOf(practiceTarget);
     setSelectedEvidenceId(null);
@@ -506,6 +598,7 @@ export default function App() {
     if (!started) return;
     micCaptureEpochRef.current += 1;
     setMicAudio(null);
+    setNoteEdits([]);
     setReplaySound('original');
     micSegmenterRef.current.reset();
     recordingInputRef.current = 'mic';
@@ -528,6 +621,7 @@ export default function App() {
       if (recordingInputRef.current === 'mic') mic.stop();
       recordingInputRef.current = null;
       setPracticeOf(null);
+      setNoteEdits([]);
       take.clearTake();
       return;
     }
@@ -560,6 +654,7 @@ export default function App() {
     micCaptureEpochRef.current += 1;
     setMicAudioFinalizing(false);
     setMicAudio(null);
+    setNoteEdits([]);
     mic.stop();
     micSegmenterRef.current.reset();
     recordingInputRef.current = null;
@@ -578,6 +673,7 @@ export default function App() {
     micCaptureEpochRef.current += 1;
     setMicAudioFinalizing(false);
     setMicAudio(null);
+    setNoteEdits([]);
     mic.stop();
     micSegmenterRef.current.reset();
     recordingInputRef.current = null;
@@ -737,16 +833,24 @@ export default function App() {
               <input aria-label="Name this take" type="text" maxLength={80} placeholder="Name this take (optional)" value={bankName} onChange={(event) => setBankName(event.target.value)} disabled={bankBusy || !bankAvailable} />
               <button type="button" onClick={() => void saveCurrentToBank()} disabled={!bankAvailable || bankLoading || bankBusy || transport.mode !== 'stopped' || micAudioFinalizing || !take.source || take.notes.length === 0 && !micAudio}>Save current take</button>
             </div>
-            {bankStatus && <p className="take-bank-status" role="status">{bankStatus}</p>}
+            <div className="take-bank-transfer" aria-label="Import and export take files">
+              <button type="button" onClick={() => void exportFromBank()} disabled={!bankAvailable || bankLoading || bankBusy || transport.mode !== 'stopped' || micAudioFinalizing || bankedTakes.length === 0}>Export all takes</button>
+              <button type="button" onClick={() => importInputRef.current?.click()} disabled={!bankAvailable || bankLoading || bankBusy || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>Import take file</button>
+              <input ref={importInputRef} type="file" accept=".json,.changes-takes.json,application/json" hidden aria-label="Choose a Changes Coach take file" onChange={(event) => void importIntoBank(event.currentTarget.files?.[0])} />
+            </div>
+            <p className="take-bank-hint">Take files include edited notes and available microphone audio. Import and export stay on this device.</p>
+            {bankStatus && <p className={`take-bank-status${bankError ? ' take-bank-status-error' : ''}`} role={bankError ? 'alert' : 'status'}>{bankStatus}</p>}
             {bankLoading ? <p className="take-bank-empty">Loading saved takes…</p> : bankedTakes.length === 0 ? <p className="take-bank-empty">Record a sax phrase, then save it here for quick replay later.</p> : <ul className="take-bank-list">
               {bankedTakes.map((item) => <li key={item.id}>
                 <div><strong>{item.name}</strong><small>{PROGRESSIONS.find((entry) => entry.id === item.progressionId)?.label ?? item.progressionId} · {item.source === 'mic' ? 'Sax' : item.source} · {item.noteCount} notes{item.hasAudio ? ' · original audio' : ''}</small></div>
                 <button type="button" onClick={() => void loadFromBank(item.id)} disabled={bankBusy || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>Load</button>
+                <button type="button" aria-label={`Export ${item.name}`} onClick={() => void exportFromBank(item)} disabled={bankBusy || bankLoading || !bankAvailable || transport.mode !== 'stopped' || micAudioFinalizing}>Export</button>
                 <button type="button" className="take-bank-delete" aria-label={`Delete ${item.name}`} onClick={() => void removeFromBank(item)} disabled={bankBusy}>Delete</button>
               </li>)}
             </ul>}
           </section>
           <div className="take-replay" aria-label="Full take replay controls">
+            {replayError && <p className="take-replay-error" role="alert">{replayError}</p>}
             <div className="take-replay-buttons">
               <button type="button" onClick={startFullReplay} disabled={takeEnd <= 0 || transport.mode !== 'stopped' || micAudioFinalizing || bankBusy}>▶ Replay full take</button>
               <button type="button" onClick={replayKind === 'full' && transport.mode === 'paused' ? () => void resumeFullReplay() : pauseFullReplay} disabled={replayKind !== 'full' || (transport.mode !== 'replaying' && transport.mode !== 'paused')}>{transport.mode === 'paused' && replayKind === 'full' ? '▶ Resume' : 'Ⅱ Pause'}</button>
@@ -777,18 +881,21 @@ export default function App() {
             linearPlayhead={take.notes.length > 0 && transport.mode !== 'playing' && transport.mode !== 'recording'}
             progression={progression}
           />
-          <TranscriptionEditor notes={take.notes} onChange={(updated) => { if (transport.mode === 'replaying' || transport.mode === 'paused') stopReplay(); fullCursorArmedRef.current = false; invalidateCoach(); take.replaceNotes(updated); }} visible={(take.source === 'mic' || take.source === 'example') && transport.mode !== 'recording'} origin={take.source === 'example' ? 'example' : 'mic'} progression={progression} />
+          <TranscriptionEditor notes={take.notes} onChange={(updated) => { if (transport.mode === 'replaying' || transport.mode === 'paused') stopReplay(); fullCursorArmedRef.current = false; invalidateCoach(); setNoteEdits((previous) => [...previous, ...diffNoteEdits(take.notes, updated)]); take.replaceNotes(updated); }} visible={(take.source === 'mic' || take.source === 'example') && transport.mode !== 'recording'} origin={take.source === 'example' ? 'example' : 'mic'} progression={progression} />
           <p className="roll-caption">Select a note for its phrase evidence · ? marks a passage with no nearby resolution detected · arrows mark detected moves</p>
         </section>
 
-        <section className="panel analysis-panel" aria-label="Phrase analysis">
-          <div className="panel-heading analysis-heading"><p className="eyebrow">04 / WHAT HAPPENED</p><h2>Phrase evidence</h2></div>
+        <section className="panel analysis-panel" aria-label="Take analysis">
+          <div className="panel-heading analysis-heading"><p className="eyebrow">04 / WHAT HAPPENED</p><h2>Take analysis</h2></div>
+          {take.source && transport.mode !== 'recording' && transport.mode !== 'counting-in' &&
+            <SoloFeedback report={soloFeedback} onSelectNote={selectFeedbackNote} onSeekBeat={seekFullReplay} />}
+          <h3 className="phrase-evidence-title">Phrase evidence</h3>
           {phraseEvidence.length === 0 ? (
             <p className="analysis-empty">{transport.mode === 'recording' ? 'Stop the take to see phrase evidence.' : 'Record a piano, MIDI, or sax take, or load the example to inspect phrase evidence.'}</p>
           ) : (
             <>
               {selectedNote || selectedPassage ? (
-                <div className="selected-passage" id="selected-passage">
+                <div className="selected-passage" id="selected-passage" tabIndex={-1}>
                   {selectedNote ? (
                     <>
                       <p className="eyebrow">SELECTED NOTE · {formatPosition(selectedNote.startBeat)}</p>

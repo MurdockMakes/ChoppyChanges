@@ -143,31 +143,37 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--amber); out
 .take-bank-heading small, .take-bank-heading span { color: #a7c3b1; font-size: 10px; }
 .take-bank-heading span { white-space: nowrap; }
 .take-bank-save { display: flex; flex-wrap: wrap; gap: 7px; }
-.take-bank-save input { flex: 1 1 180px; min-width: 0; min-height: 32px; padding: 6px 9px; border: 1px solid #60776b; border-radius: 7px; color: #eef6e8; background: #112820; font-size: 11px; }
-.take-bank button { min-height: 31px; padding: 5px 9px; border: 1px solid #74916e; border-radius: 7px; color: #163326; background: #b9e89c; font-size: 11px; font-weight: 750; white-space: nowrap; }
+.take-bank-save input { flex: 1 1 180px; min-width: 0; min-height: 40px; padding: 6px 9px; border: 1px solid #60776b; border-radius: 7px; color: #eef6e8; background: #112820; font-size: 12px; }
+.take-bank button { min-height: 40px; padding: 7px 10px; border: 1px solid #74916e; border-radius: 7px; color: #163326; background: #b9e89c; font-size: 12px; font-weight: 750; }
 .take-bank button:disabled { opacity: .47; cursor: not-allowed; }
 .take-bank button:not(:disabled):hover { filter: brightness(1.1); }
+.take-bank button:focus-visible, .take-bank-save input:focus-visible { outline: 3px solid #f2d78d; outline-offset: 2px; }
+.take-bank-transfer { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.take-bank-hint { margin: 7px 0 0; color: #a7c3b1; font-size: 11px; line-height: 1.4; }
 .take-bank-status, .take-bank-empty { margin: 8px 0 0; color: #b2cbb8; font-size: 10px; line-height: 1.4; }
+.take-bank-status-error { color: #ffd0c6; }
 .take-bank-list { display: grid; gap: 6px; max-height: 220px; overflow-y: auto; margin: 10px 0 0; padding: 0; list-style: none; }
-.take-bank-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; padding: 7px; border: 1px solid #456057; border-radius: 8px; background: #132821; }
+.take-bank-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 6px; padding: 7px; border: 1px solid #456057; border-radius: 8px; background: #132821; }
 .take-bank-list li div { min-width: 0; }
 .take-bank-list li strong { display: block; overflow-wrap: anywhere; color: #e7f3e5; font-size: 11px; }
 .take-bank-list li small { display: block; margin-top: 2px; color: #a6bfb2; font-size: 10px; line-height: 1.3; }
 .take-bank .take-bank-delete { border-color: #765d57; color: #f3c9c0; background: #432e2d; }
 .take-replay { display: grid; gap: 10px; margin: 0 0 12px; padding: 11px 12px; border: 1px solid #416469; border-radius: 10px; background: #1a3035; }
+.take-replay-error { margin: 0; color: #ffd0c6; font-size: 11px; line-height: 1.45; }
 .take-replay-buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
-.take-replay-buttons button, .take-replay-buttons select { min-height: 32px; padding: 5px 9px; border: 1px solid #578084; border-radius: 7px; color: #ecf7f0; background: #27464b; font: inherit; font-size: 11px; font-weight: 750; }
+.take-replay-buttons button, .take-replay-buttons select { min-height: 40px; padding: 7px 9px; border: 1px solid #578084; border-radius: 7px; color: #ecf7f0; background: #27464b; font: inherit; font-size: 11px; font-weight: 750; }
 .take-replay-buttons button:first-child { border-color: #a5dc8f; color: #173725; background: #c4efa0; }
 .take-replay-buttons button:not(:disabled):hover, .take-replay-buttons select:not(:disabled):hover { filter: brightness(1.14); }
 .take-replay-buttons button:disabled, .take-replay-buttons select:disabled { opacity: .45; }
 .take-replay-buttons label { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: #b9d4d2; font-size: 11px; font-weight: 700; }
 .take-replay-position { display: grid; grid-template-columns: auto minmax(80px, 1fr) auto; align-items: center; gap: 9px; color: #bdd2d0; font-size: 11px; }
-.take-replay-position input { width: 100%; accent-color: #d7ed9b; }
+.take-replay-position input { width: 100%; min-height: 40px; accent-color: #d7ed9b; }
 .take-replay-position input:disabled { opacity: .4; }
 .take-replay-position output { color: #e3efdf; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .roll-caption { margin: 9px 1px 0; color: #8da7a7; font-size: 10px; letter-spacing: .02em; }
 .analysis-panel { display: flex; flex-direction: column; gap: 10px; }
 .analysis-panel .panel-heading { margin-bottom: 1px; }
+.phrase-evidence-title { margin: 2px 0 0; color: #e5f2e7; font-size: 15px; line-height: 1.3; }
 .analysis-empty { min-height: 110px; display: flex; align-items: center; margin: 0; padding: 18px; border: 1px dashed #3d5a59; border-radius: 11px; color: #adbfba; background: #102125; font-size: 13px; line-height: 1.5; }
 .analysis-prompt { margin: 0; padding: 13px; border: 1px dashed #557168; border-radius: 9px; color: #c7d7ce; font-size: 11px; line-height: 1.45; }
 .evidence-overview { border: 1px solid #3d5a59; border-radius: 9px; background: #182b2d; }
@@ -188,6 +194,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--amber); out
 .evidence-row strong { font-size: 11px; font-weight: 700; line-height: 1.25; }
 .evidence-row small { flex: none; color: #aac0b9; font-size: 9px; white-space: nowrap; }
 .selected-passage { padding: 14px; border: 1px solid #64845b; border-radius: 12px; background: linear-gradient(145deg, #254737, #203a32); }
+.selected-passage:focus-visible { outline: 3px solid #f1edc6; outline-offset: 2px; }
 .selected-passage > strong { display: block; margin-top: 6px; color: #e8f8c5; font-size: 16px; }
 .selected-passage > p:not(.eyebrow) { margin: 7px 0 12px; color: #d2e1d3; font-size: 11px; line-height: 1.5; }
 .selected-note-count { margin-bottom: 8px !important; }
@@ -274,8 +281,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--amber); out
   .keyboard-card { padding: 15px; }
   .selected-actions { grid-template-columns: 1fr; }
   .take-replay-buttons label { margin-left: 0; }
-  .take-bank-list li { grid-template-columns: minmax(0, 1fr) auto; }
+  .take-bank-list li { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .take-bank-list li div { grid-column: 1 / -1; }
+  .take-bank-list li button { white-space: normal; }
   .take-replay-position { grid-template-columns: auto minmax(80px, 1fr); }
   .take-replay-position output { grid-column: 1 / -1; }
 }

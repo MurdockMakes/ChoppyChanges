@@ -8,7 +8,9 @@ export const TAKE_FILE_EXTENSION = '.changes-takes.json';
 
 const MAX_FILE_BYTES = 256 * 1024 * 1024;
 const MAX_TAKES = 1000;
-const MAX_NOTES = 50000;
+// These bounds cover the app's longest 16-pass blues take with room for edits.
+export const MAX_PORTABLE_NOTES = 4096;
+export const MAX_PORTABLE_TAKE_BEATS = 1024;
 const MAX_EDITS = 100000;
 let idSequence = 0;
 
@@ -58,7 +60,7 @@ function note(value: unknown, where: string): NoteEvent {
   const pitch = finiteNumber(item.pitch, `${where} pitch`);
   const startBeat = finiteNumber(item.startBeat, `${where} start beat`);
   const durationBeats = finiteNumber(item.durationBeats, `${where} length`, 0.001);
-  if (!Number.isInteger(pitch) || pitch > 127 || startBeat > 1e7 || durationBeats > 1e7) throw new Error(`${where} has an invalid pitch or timing.`);
+  if (!Number.isInteger(pitch) || pitch > 127 || startBeat + durationBeats > MAX_PORTABLE_TAKE_BEATS) throw new Error(`${where} has an invalid pitch or timing (maximum ${MAX_PORTABLE_TAKE_BEATS} beats).`);
   return { id: id(item.id, `${where} ID`), pitch, startBeat, durationBeats };
 }
 
@@ -107,7 +109,10 @@ function decodeAudio(value: unknown, where: string): BankedTake['audio'] {
   if (value === null) return null;
   const audio = record(value, `${where} audio`);
   const mimeType = audio.mimeType;
-  if (typeof mimeType !== 'string' || mimeType.length > 127 || /[^\x20-\x7e]/.test(mimeType)) throw new Error(`${where} has an invalid audio type.`);
+  if (typeof mimeType !== 'string' || mimeType.length > 127 || /[^\x20-\x7e]/.test(mimeType) ||
+      mimeType !== '' && !/^(?:audio\/[a-z0-9.+-]+|video\/webm)(?:;.*)?$/i.test(mimeType)) {
+    throw new Error(`${where} has an invalid audio type.`);
+  }
   const data = audio.dataBase64;
   if (typeof data !== 'string' || !data || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) {
     throw new Error(`${where} has damaged audio data.`);
@@ -124,7 +129,7 @@ function decodeAudio(value: unknown, where: string): BankedTake['audio'] {
   const startBeat = finiteNumber(audio.startBeat, `${where} audio start beat`);
   const endBeat = finiteNumber(audio.endBeat, `${where} audio end beat`);
   const rate = finiteNumber(audio.rate, `${where} audio recording speed`, 0.001);
-  if (endBeat < startBeat || startBeat > 1e7 || endBeat > 1e7 || rate > 8) throw new Error(`${where} has invalid audio timing.`);
+  if (endBeat < startBeat || endBeat > MAX_PORTABLE_TAKE_BEATS || rate > 8) throw new Error(`${where} has invalid audio timing.`);
   return { blob: new Blob(chunks, { type: mimeType }), startBeat, endBeat, rate };
 }
 
@@ -143,7 +148,8 @@ function validateTake(value: unknown, index: number): BankedTake {
   if (source !== 'midi' && source !== 'mic' && source !== 'piano' && source !== 'example') throw new Error(`${where} has an unsupported source.`);
   const saxKey = item.saxKey;
   if (saxKey !== 'concert' && saxKey !== 'alto' && saxKey !== 'tenor') throw new Error(`${where} has an unsupported sax key.`);
-  if (!Array.isArray(item.notes) || item.notes.length > MAX_NOTES) throw new Error(`${where} has an invalid note list.`);
+  if (!Array.isArray(item.notes)) throw new Error(`${where} has an invalid note list.`);
+  if (item.notes.length > MAX_PORTABLE_NOTES) throw new Error(`${where} exceeds the ${MAX_PORTABLE_NOTES}-note limit.`);
   const notes = item.notes.map((entry, noteIndex) => note(entry, `${where}, note ${noteIndex + 1}`));
   if (new Set(notes.map((entry) => entry.id)).size !== notes.length) throw new Error(`${where} contains duplicate note IDs.`);
   if (!Array.isArray(item.edits) || item.edits.length > MAX_EDITS) throw new Error(`${where} has an invalid edit list.`);
@@ -185,6 +191,10 @@ export async function createTakeTransferFile(takes: readonly BankedTake[]): Prom
   for (const take of takes) {
     const chart = PROGRESSIONS.find((entry) => entry.id === take.progressionId);
     if (!chart) throw new Error(`Cannot export “${take.name}”: its progression is unavailable.`);
+    if (take.notes.length > MAX_PORTABLE_NOTES || take.notes.some((entry) => !Number.isFinite(entry.startBeat + entry.durationBeats) || entry.startBeat + entry.durationBeats > MAX_PORTABLE_TAKE_BEATS) ||
+        take.audio && take.audio.endBeat > MAX_PORTABLE_TAKE_BEATS) {
+      throw new Error(`Cannot export “${take.name}”: a take file supports at most ${MAX_PORTABLE_NOTES} notes and ${MAX_PORTABLE_TAKE_BEATS} beats per take.`);
+    }
     const audio = take.audio ? {
       mimeType: take.audio.blob.type,
       startBeat: take.audio.startBeat,
@@ -224,9 +234,36 @@ export async function parseTakeTransferFile(file: Blob): Promise<BankedTake[]> {
   return document.takes.map(validateTake);
 }
 
+/** A valid container must decode here before any imported record is committed. */
+async function validatePlayableAudio(takes: readonly BankedTake[]): Promise<void> {
+  if (!takes.some((take) => take.audio)) return;
+  const Context = globalThis.AudioContext;
+  if (!Context) throw new Error('This browser cannot verify microphone audio in a take file.');
+  let context: AudioContext;
+  try {
+    context = new Context();
+  } catch {
+    throw new Error('This browser could not open its local audio decoder for the take file. No takes were imported.');
+  }
+  try {
+    for (const [index, take] of takes.entries()) {
+      if (!take.audio) continue;
+      try {
+        const decoded = await context.decodeAudioData(await take.audio.blob.arrayBuffer());
+        if (!Number.isFinite(decoded.duration) || decoded.duration <= 0) throw new Error('Empty decoded audio');
+      } catch {
+        throw new Error(`Take ${index + 1} has damaged or unsupported microphone audio. No takes were imported.`);
+      }
+    }
+  } finally {
+    await context.close();
+  }
+}
+
 /** Imports only after complete validation; IndexedDB add() keeps existing takes untouched. */
 export async function importTakeTransferFile(file: Blob): Promise<BankedTake[]> {
   const takes = await parseTakeTransferFile(file);
+  await validatePlayableAudio(takes);
   await addBankedTakes(takes);
   return takes;
 }
