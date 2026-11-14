@@ -163,3 +163,17 @@ test('metronome, chord, and replay tones remain separate from held piano keys', 
     restore();
   }
 });
+
+test('a replay note near its end uses the remaining duration', async () => {
+  const restore = installAudioContext();
+  try {
+    const engine = new AudioEngine();
+    await engine.resume();
+    const context = FakeAudioContext.instances[0];
+    engine.playNote(60, 0.025);
+    assert.ok(context.oscillators[0].stops[0] <= context.currentTime + 0.031);
+    assert.ok(context.gains[0].gain.events.every((event, index, events) => index === 0 || event.time >= events[index - 1].time));
+  } finally {
+    restore();
+  }
+});

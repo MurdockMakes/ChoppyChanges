@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
+import type { CoachEvidence } from './coach';
 import {
   BEATS_PER_BAR,
   chordAtBeat,
@@ -7,17 +8,21 @@ import {
   spellNoteWithOctave,
   type NoteEvent,
   type Progression,
-  type Resolution,
 } from './theory';
+import { buildNoteEvidenceIndex } from './noteEvidence';
 import './PianoRoll.css';
 
 interface PianoRollProps {
   notes: NoteEvent[];
   pending: NoteEvent[];
   currentBeat: number;
-  resolutions: Resolution[];
-  selectedId: string | null;
-  onSelectResolution: (id: string) => void;
+  evidence: CoachEvidence[];
+  selectedEvidenceId: string | null;
+  selectedNoteId: string | null;
+  onSelectEvidence: (id: string) => void;
+  onSelectNote: (id: string) => void;
+  onSeekBeat?: (beat: number) => void;
+  linearPlayhead?: boolean;
   progression: Progression;
 }
 
@@ -36,8 +41,10 @@ function noteRole(note: NoteEvent, progression: Progression) {
   return 'other';
 }
 
-export default function PianoRoll({ notes, pending, currentBeat, resolutions, selectedId, onSelectResolution, progression }: PianoRollProps) {
+export default function PianoRoll({ notes, pending, currentBeat, evidence, selectedEvidenceId, selectedNoteId, onSelectEvidence, onSelectNote, onSeekBeat, linearPlayhead = false, progression }: PianoRollProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const evidenceByNote = useMemo(() => buildNoteEvidenceIndex(notes, evidence), [notes, evidence]);
+  const noteById = useMemo(() => new Map(notes.map((note) => [note.id, note])), [notes]);
   const chartBeats = progression.chords.length * BEATS_PER_BAR;
   const allNotes = useMemo(() => [...notes, ...pending], [notes, pending]);
   const recordedEnd = Math.max(chartBeats, ...notes.map((note) => note.startBeat + note.durationBeats), ...pending.map(() => currentBeat));
@@ -51,10 +58,16 @@ export default function PianoRoll({ notes, pending, currentBeat, resolutions, se
   const height = TOP + rows * ROW_HEIGHT + BOTTOM;
   const noteY = (pitch: number) => TOP + (maxPitch - pitch) * ROW_HEIGHT;
   const noteX = (beat: number) => LEFT + beat * BEAT_WIDTH;
-  const playheadBeat = totalBeats === chartBeats && currentBeat >= chartBeats
+  const playheadBeat = !linearPlayhead && totalBeats === chartBeats && currentBeat >= chartBeats
     ? currentBeat % chartBeats
     : Math.min(currentBeat, totalBeats);
-  const selected = resolutions.find((resolution) => resolution.id === selectedId);
+  const selected = evidence.find((item) => item.id === selectedEvidenceId);
+
+  const seekFromPointer = (event: React.PointerEvent<SVGRectElement>) => {
+    if (!onSeekBeat) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    onSeekBeat(Math.max(0, Math.min(totalBeats, ((event.clientX - bounds.left) / bounds.width) * totalBeats)));
+  };
 
   useEffect(() => {
     const viewport = scrollRef.current;
@@ -73,7 +86,7 @@ export default function PianoRoll({ notes, pending, currentBeat, resolutions, se
         width={width}
         height={height}
         viewBox={`0 0 ${width} ${height}`}
-        role="img"
+        role="group"
         aria-label={`Piano roll with ${notes.length} recorded notes across ${totalBeats / BEATS_PER_BAR} bars`}
       >
         <defs>
@@ -125,6 +138,34 @@ export default function PianoRoll({ notes, pending, currentBeat, resolutions, se
           />
         )}
 
+        {evidence.filter((item) => item.kind !== 'no-nearby-resolution' && item.noteIds.length >= 2).map((item) => {
+          const from = noteById.get(item.noteIds[0]);
+          const to = noteById.get(item.noteIds[1]);
+          if (!from || !to) return null;
+          const x1 = noteX(from.startBeat + Math.min(from.durationBeats / 2, 0.22));
+          const x2 = noteX(to.startBeat + Math.min(to.durationBeats / 2, 0.22));
+          const y1 = noteY(from.pitch) + ROW_HEIGHT / 2;
+          const y2 = noteY(to.pitch) + ROW_HEIGHT / 2;
+          const lift = Math.min(y1, y2) - 22;
+          const path = `M ${x1} ${y1} C ${x1 + 8} ${lift}, ${x2 - 8} ${lift}, ${x2} ${y2}`;
+          return (
+            <g
+              key={item.id}
+              className={`roll-resolution ${selectedEvidenceId === item.id ? 'roll-resolution--selected' : ''} roll-resolution--${item.kind}`}
+              role="button"
+              tabIndex={0}
+              aria-label={`Select ${item.title}: ${item.explanation}`}
+              aria-pressed={selectedEvidenceId === item.id}
+              onClick={() => onSelectEvidence(item.id)}
+              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelectEvidence(item.id); } }}
+            >
+              <path d={path} className="roll-resolution-hit" />
+              <path d={path} className="roll-resolution-path" markerEnd="url(#resolution-arrowhead)" />
+              <title>{item.explanation}</title>
+            </g>
+          );
+        })}
+
         {allNotes.map((note) => {
           const chord = chordAtBeat(note.startBeat, progression);
           const duration = pending.some((held) => held.id === note.id)
@@ -135,44 +176,46 @@ export default function PianoRoll({ notes, pending, currentBeat, resolutions, se
           const noteWidth = Math.max(10, duration * BEAT_WIDTH - 3);
           const name = spellNoteWithOctave(note.pitch, chord);
           const isPending = pending.some((held) => held.id === note.id);
-          const isSelected = selected && (selected.from.id === note.id || selected.to?.id === note.id);
+          const related = evidenceByNote.get(note.id) ?? [];
+          const isOpen = related.some((item) => item.kind === 'no-nearby-resolution');
+          const isSelected = selected?.noteIds.includes(note.id);
+          const isSelectedNote = selectedNoteId === note.id;
+          const description = `${name} on ${chord.name} at ${formatPosition(note.startBeat)}. ${related.length === 0 ? 'No related phrase evidence.' : `${related.length} related evidence ${related.length === 1 ? 'item' : 'items'}: ${related.map((item) => item.title).join('; ')}.`}`;
           return (
-            <g key={note.id} className={`roll-note-group ${isSelected ? 'roll-note-group--selected' : ''}`}>
+            <g
+              key={note.id}
+              className={`roll-note-group ${isSelected ? 'roll-note-group--selected' : ''} ${isSelectedNote ? 'roll-note-group--selected-note' : ''} ${isOpen ? 'roll-note-group--open' : ''}`}
+              role={isPending ? undefined : 'button'}
+              tabIndex={isPending ? undefined : 0}
+              aria-label={isPending ? undefined : `Select note ${description}`}
+              aria-pressed={isPending ? undefined : isSelectedNote}
+              onClick={isPending ? undefined : () => onSelectNote(note.id)}
+              onKeyDown={isPending ? undefined : (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelectNote(note.id); } }}
+            >
               <rect
                 x={x} y={y} width={noteWidth} height={ROW_HEIGHT - 2} rx={3}
                 className={`roll-note roll-note--${noteRole(note, progression)} ${isPending ? 'roll-note--pending' : ''}`}
               />
               {noteWidth >= 17 && <text x={x + 4} y={y + ROW_HEIGHT - 4} className="roll-note-label">{name}</text>}
-              <title>{`${name} on ${chord.name} at ${formatPosition(note.startBeat)}`}</title>
+              {related.length > 0 && !isPending && (
+                <g className={`roll-note-badge ${isOpen ? 'roll-note-badge--open' : ''}`} aria-hidden="true">
+                  <circle cx={x + noteWidth - 2} cy={y - 2} r={6.5} />
+                  <text x={x + noteWidth - 2} y={y + 1.3} textAnchor="middle">{isOpen ? '?' : related.length > 1 ? related.length : '•'}</text>
+                </g>
+              )}
+              <title>{description}</title>
             </g>
           );
         })}
 
-        {resolutions.filter((resolution) => resolution.kind !== 'none' && resolution.to).map((resolution) => {
-          const from = resolution.from;
-          const to = resolution.to!;
-          const x1 = noteX(from.startBeat + Math.min(from.durationBeats / 2, 0.22));
-          const x2 = noteX(to.startBeat + Math.min(to.durationBeats / 2, 0.22));
-          const y1 = noteY(from.pitch) + ROW_HEIGHT / 2;
-          const y2 = noteY(to.pitch) + ROW_HEIGHT / 2;
-          const lift = Math.min(y1, y2) - 22;
-          const path = `M ${x1} ${y1} C ${x1 + 8} ${lift}, ${x2 - 8} ${lift}, ${x2} ${y2}`;
-          return (
-            <g
-              key={resolution.id}
-              className={`roll-resolution ${selectedId === resolution.id ? 'roll-resolution--selected' : ''} roll-resolution--${resolution.kind}`}
-              role="button"
-              tabIndex={0}
-              aria-label={`Select ${resolution.title}: ${resolution.explanation}`}
-              onClick={() => onSelectResolution(resolution.id)}
-              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelectResolution(resolution.id); } }}
-            >
-              <path d={path} className="roll-resolution-hit" />
-              <path d={path} className="roll-resolution-path" markerEnd="url(#resolution-arrowhead)" />
-              <title>{resolution.explanation}</title>
-            </g>
-          );
-        })}
+        {onSeekBeat && <rect
+          x={LEFT} y={0} width={totalBeats * BEAT_WIDTH} height={TOP}
+          className="roll-seek-region"
+          aria-hidden="true"
+          onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); seekFromPointer(event); }}
+          onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) seekFromPointer(event); }}
+          onPointerUp={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+        />}
 
         <line x1={noteX(playheadBeat)} x2={noteX(playheadBeat)} y1={0} y2={height - BOTTOM} className="roll-playhead" />
         <circle cx={noteX(playheadBeat)} cy={TOP - 2} r={4} className="roll-playhead-dot" />

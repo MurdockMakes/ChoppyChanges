@@ -30,6 +30,13 @@ export class AudioEngine {
   private oscillators = new Set<OscillatorNode>();
   private voices = new Map<number, { oscillator: OscillatorNode; envelope: GainNode }>();
 
+  /** Keep browser checks silent when opened with ?muteAudio=1. */
+  private connectOutput(envelope: GainNode, context: AudioContext) {
+    if (new URLSearchParams(window.location?.search ?? '').get('muteAudio') !== '1') {
+      envelope.connect(context.destination);
+    }
+  }
+
   async resume() {
     if (!this.context && 'AudioContext' in window) this.context = new AudioContext();
     if (this.context?.state === 'suspended') await this.context.resume();
@@ -41,13 +48,16 @@ export class AudioEngine {
     const now = context.currentTime;
     const oscillator = context.createOscillator();
     const envelope = context.createGain();
+    const soundingTime = Math.max(0.005, duration);
+    const attackTime = Math.min(attack, soundingTime * 0.35);
     oscillator.type = type;
     oscillator.frequency.value = 440 * 2 ** ((pitch - 69) / 12);
     envelope.gain.setValueAtTime(0.0001, now);
-    envelope.gain.exponentialRampToValueAtTime(Math.max(0.0002, volume), now + attack);
-    envelope.gain.setValueAtTime(Math.max(0.0002, volume), now + Math.max(attack, duration - 0.055));
-    envelope.gain.exponentialRampToValueAtTime(0.0001, now + duration);
-    oscillator.connect(envelope).connect(context.destination);
+    envelope.gain.exponentialRampToValueAtTime(Math.max(0.0002, volume), now + attackTime);
+    envelope.gain.setValueAtTime(Math.max(0.0002, volume), now + Math.max(attackTime, soundingTime - 0.055));
+    envelope.gain.exponentialRampToValueAtTime(0.0001, now + soundingTime);
+    oscillator.connect(envelope);
+    this.connectOutput(envelope, context);
     oscillator.onended = () => {
       oscillator.disconnect();
       envelope.disconnect();
@@ -55,7 +65,7 @@ export class AudioEngine {
     };
     this.oscillators.add(oscillator);
     oscillator.start(now);
-    oscillator.stop(now + duration + 0.005);
+    oscillator.stop(now + soundingTime + 0.005);
   }
 
   click(accent: boolean) {
@@ -67,7 +77,7 @@ export class AudioEngine {
   }
 
   playNote(pitch: number, seconds: number) {
-    this.tone(pitch, Math.max(0.08, seconds), 0.12, 'triangle', 0.012);
+    this.tone(pitch, seconds, 0.12, 'triangle', 0.012);
   }
 
   /** Starts a piano voice that lasts until noteOff, independent of timed cues. */
@@ -82,7 +92,8 @@ export class AudioEngine {
     oscillator.frequency.value = 440 * 2 ** ((pitch - 69) / 12);
     envelope.gain.setValueAtTime(0.0001, now);
     envelope.gain.exponentialRampToValueAtTime(0.12, now + 0.012);
-    oscillator.connect(envelope).connect(context.destination);
+    oscillator.connect(envelope);
+    this.connectOutput(envelope, context);
     const voice = { oscillator, envelope };
     this.voices.set(pitch, voice);
     oscillator.onended = () => {

@@ -13,6 +13,7 @@ import { exampleTakeFor } from './example';
 import CircleOfFifths, { type CircleForm } from './CircleOfFifths';
 import { buildCoachContext, fallbackCoachPlan, passageForExercise, planExercise, planPriority, validateGeminiCoachResponse, type CoachEvidence, type CoachPlan } from './coach';
 import { TakeReplay, takeEndBeat } from './takeReplay';
+import { buildNoteEvidenceIndex } from './noteEvidence';
 
 type PassageTarget = Pick<Resolution, 'startBeat' | 'endBeat' | 'title' | 'explanation'>;
 
@@ -55,19 +56,21 @@ export default function App() {
     take.stopTake();
   };
   const mic = useMicrophone(onMicFrame, onMicEnded);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [practiceOf, setPracticeOf] = useState<PassageTarget | null>(null);
   const resolutions = useMemo(() => transport.mode === 'recording' ? [] : analyzeTake(take.notes, progression), [take.notes, transport.mode, progression]);
   const coachContext = useMemo(() => buildCoachContext(take.notes, progression, resolutions), [take.notes, progression, resolutions]);
+  const phraseEvidence = useMemo(() => transport.mode === 'recording' ? [] : coachContext.summary.evidence, [coachContext, transport.mode]);
+  const noteEvidenceIndex = useMemo(() => buildNoteEvidenceIndex(take.notes, phraseEvidence), [take.notes, phraseEvidence]);
   const [coachPlan, setCoachPlan] = useState<CoachPlan | null>(null);
   const [coachOrigin, setCoachOrigin] = useState<'gemini' | 'local' | null>(null);
   const [coachLoading, setCoachLoading] = useState(false);
-  const [coachEvidenceId, setCoachEvidenceId] = useState<string | null>(null);
   const coachRequestRef = useRef<AbortController | null>(null);
   const coachEpochRef = useRef(0);
-  const selectedResolution: Resolution | undefined = resolutions.find((resolution) => resolution.id === selectedId);
-  const selectedCoachEvidence: CoachEvidence | undefined = coachContext.summary.evidence.find((item) => item.id === coachEvidenceId);
-  const selectedPassage: PassageTarget | undefined = selectedResolution ?? selectedCoachEvidence;
+  const selectedPassage: CoachEvidence | undefined = phraseEvidence.find((item) => item.id === selectedEvidenceId);
+  const selectedNote = take.notes.find((note) => note.id === selectedNoteId);
+  const selectedNoteEvidence = selectedNote ? noteEvidenceIndex.get(selectedNote.id) ?? [] : [];
   const takeEnd = takeEndBeat(take.notes);
 
   useEffect(() => {
@@ -90,7 +93,6 @@ export default function App() {
     setCoachLoading(false);
     setCoachPlan(null);
     setCoachOrigin(null);
-    setCoachEvidenceId(null);
   }
 
   useEffect(() => {
@@ -100,7 +102,8 @@ export default function App() {
     setCoachLoading(false);
     setCoachPlan(null);
     setCoachOrigin(null);
-    setCoachEvidenceId(null);
+    setSelectedEvidenceId(null);
+    setSelectedNoteId(null);
   }, [take.notes, progression.id, transport.mode === 'recording']);
 
   async function makePracticePlan() {
@@ -169,8 +172,10 @@ export default function App() {
     setReplayKind(kind);
     const startId = replayStartIdRef.current;
     try {
+      await transport.prepareAudio();
+      if (startId !== replayStartIdRef.current || transport.modeRef.current !== 'stopped') return;
       await transport.start('replaying', fromBeat, rate, untilBeat);
-      if (startId !== replayStartIdRef.current || transport.modeRef.current !== 'replaying') return;
+      if (startId !== replayStartIdRef.current || !['replaying'].includes(transport.modeRef.current)) return;
       session.start(transport.getBeat(), rate);
     } catch {
       if (startId === replayStartIdRef.current) stopReplay();
@@ -196,7 +201,7 @@ export default function App() {
     const startId = ++replayStartIdRef.current;
     try {
       await transport.resumeReplay();
-      if (startId !== replayStartIdRef.current || transport.modeRef.current !== 'replaying') return;
+      if (startId !== replayStartIdRef.current || !['replaying'].includes(transport.modeRef.current)) return;
       replaySessionRef.current?.start(transport.getBeat(), fullReplayRateRef.current);
     } catch {
       if (startId === replayStartIdRef.current) stopReplay();
@@ -253,7 +258,8 @@ export default function App() {
     micSegmenterRef.current.reset();
     recordingInputRef.current = null;
     setMicLivePitch(null);
-    setSelectedId(null);
+    setSelectedEvidenceId(null);
+    setSelectedNoteId(null);
     setPracticeOf(null);
     setProgressionId(nextId);
     take.restoreTake(saved?.notes ?? [], saved?.source ?? null);
@@ -268,27 +274,30 @@ export default function App() {
     switchProgression(`${form}-${progression.keyId}`);
   }
 
-  function selectResolution(id: string) {
+  function selectEvidence(id: string, noteId: string | null = null, scrollToDetails = false) {
+    const evidence = phraseEvidence.find((item) => item.id === id);
+    if (!evidence) return;
     if (transport.mode === 'replaying' || transport.mode === 'paused') stopReplay();
     fullCursorArmedRef.current = false;
-    setSelectedId(id);
-    setCoachEvidenceId(null);
-    const resolution = resolutions.find((item) => item.id === id);
-    if (resolution) transport.seek(resolution.startBeat);
+    setSelectedEvidenceId(id);
+    setSelectedNoteId(noteId);
+    transport.seek(evidence.startBeat);
+    if (scrollToDetails) requestAnimationFrame(() => document.getElementById('selected-passage')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+  }
+
+  function selectNote(id: string) {
+    const note = take.notes.find((item) => item.id === id);
+    if (!note) return;
+    if (transport.mode === 'replaying' || transport.mode === 'paused') stopReplay();
+    fullCursorArmedRef.current = false;
+    const related = noteEvidenceIndex.get(id) ?? [];
+    setSelectedNoteId(id);
+    setSelectedEvidenceId(related.find((item) => item.id === selectedEvidenceId)?.id ?? related[0]?.id ?? null);
+    transport.seek(note.startBeat);
   }
 
   function selectCoachEvidence(id: string) {
-    const evidence = coachContext.summary.evidence.find((item) => item.id === id);
-    if (!evidence) return;
-    if (resolutions.some((item) => item.id === id)) selectResolution(id);
-    else {
-      if (transport.mode === 'replaying' || transport.mode === 'paused') stopReplay();
-      fullCursorArmedRef.current = false;
-      setSelectedId(null);
-      setCoachEvidenceId(id);
-      transport.seek(evidence.startBeat);
-    }
-    requestAnimationFrame(() => document.getElementById('selected-passage')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+    selectEvidence(id, null, true);
   }
 
   function replaySelected() {
@@ -306,7 +315,8 @@ export default function App() {
     invalidateCoach();
     recordingInputRef.current = 'midi';
     setPracticeOf(practiceTarget);
-    setSelectedId(null);
+    setSelectedEvidenceId(null);
+    setSelectedNoteId(null);
     void take.startTake(fromBeat, rate, 'midi');
   }
 
@@ -317,7 +327,8 @@ export default function App() {
     invalidateCoach();
     recordingInputRef.current = 'piano';
     setPracticeOf(practiceTarget);
-    setSelectedId(null);
+    setSelectedEvidenceId(null);
+    setSelectedNoteId(null);
     void take.startTake(fromBeat, rate, 'piano');
   }
 
@@ -332,7 +343,8 @@ export default function App() {
     recordingInputRef.current = 'mic';
     setMicLivePitch(null);
     setPracticeOf(practiceTarget);
-    setSelectedId(null);
+    setSelectedEvidenceId(null);
+    setSelectedNoteId(null);
     await take.startTake(fromBeat, rate, 'mic');
   }
 
@@ -356,7 +368,8 @@ export default function App() {
     recordingInputRef.current = null;
     setMicLivePitch(null);
     setPracticeOf(null);
-    setSelectedId(null);
+    setSelectedEvidenceId(null);
+    setSelectedNoteId(null);
     take.loadExample(exampleTakeFor(progression));
   }
 
@@ -369,7 +382,8 @@ export default function App() {
     recordingInputRef.current = null;
     setMicLivePitch(null);
     setPracticeOf(null);
-    setSelectedId(null);
+    setSelectedEvidenceId(null);
+    setSelectedNoteId(null);
     take.clearTake();
   }
 
@@ -490,7 +504,7 @@ export default function App() {
             <div><p className="eyebrow">03 / YOUR TAKE</p><h2>Piano roll</h2></div>
             <span className="note-count">{take.notes.length} {take.notes.length === 1 ? 'NOTE' : 'NOTES'}</span>
           </div>
-          <p className="take-summary">{transport.mode === 'recording' ? recordingInputRef.current === 'mic' ? 'Listening for a single-note sax phrase…' : recordingInputRef.current === 'piano' ? 'Recording on-screen piano notes…' : 'Recording MIDI notes…' : take.source === 'example' ? 'Example take loaded. Edit its notes or select an evidence card.' : take.source === 'midi' ? 'MIDI take captured. Select an evidence card to inspect a moment.' : take.source === 'piano' ? 'Piano take captured. Select an evidence card to inspect a moment.' : take.source === 'mic' ? 'Sax phrase transcribed in concert pitch. Correct notes below, then inspect the evidence.' : 'Play the piano freely, start a take, or load the example.'}{take.pending.length ? ` ${take.pending.length} held.` : ''}</p>
+          <p className="take-summary">{transport.mode === 'recording' ? recordingInputRef.current === 'mic' ? 'Listening for a single-note sax phrase…' : recordingInputRef.current === 'piano' ? 'Recording on-screen piano notes…' : 'Recording MIDI notes…' : take.source === 'example' ? 'Example take loaded. Select a note on the roll to inspect its evidence.' : take.source === 'midi' ? 'MIDI take captured. Select a note on the roll to inspect its evidence.' : take.source === 'piano' ? 'Piano take captured. Select a note on the roll to inspect its evidence.' : take.source === 'mic' ? 'Sax phrase transcribed in concert pitch. Correct notes below, then select a note on the roll.' : 'Play the piano freely, start a take, or load the example.'}{take.pending.length ? ` ${take.pending.length} held.` : ''}</p>
           {practiceOf && <p className="practice-context"><strong>Practice target:</strong> {practiceOf.explanation} {transport.mode === 'recording' ? 'Play the passage, then stop the take to see fresh evidence.' : 'Your new take is shown below.'}</p>}
           <div className="take-replay" aria-label="Full take replay controls">
             <div className="take-replay-buttons">
@@ -511,50 +525,76 @@ export default function App() {
             notes={take.notes}
             pending={take.pending}
             currentBeat={transport.beat}
-            resolutions={resolutions}
-            selectedId={selectedId}
-            onSelectResolution={selectResolution}
+            evidence={phraseEvidence}
+            selectedEvidenceId={selectedEvidenceId}
+            selectedNoteId={selectedNoteId}
+            onSelectEvidence={(id) => selectEvidence(id)}
+            onSelectNote={selectNote}
             onSeekBeat={takeEnd > 0 && (transport.mode === 'stopped' || replayKind === 'full' && (transport.mode === 'replaying' || transport.mode === 'paused')) ? seekFullReplay : undefined}
             linearPlayhead={take.notes.length > 0 && transport.mode !== 'playing' && transport.mode !== 'recording'}
             progression={progression}
           />
           <TranscriptionEditor notes={take.notes} onChange={(updated) => { if (transport.mode === 'replaying' || transport.mode === 'paused') stopReplay(); fullCursorArmedRef.current = false; invalidateCoach(); take.replaceNotes(updated); }} visible={(take.source === 'mic' || take.source === 'example') && transport.mode !== 'recording'} origin={take.source === 'example' ? 'example' : 'mic'} progression={progression} />
-          <p className="roll-caption">Click or drag the timeline header to seek · arrows mark detected moves</p>
+          <p className="roll-caption">Select a note for its phrase evidence · ? marks a passage with no nearby resolution detected · arrows mark detected moves</p>
         </section>
 
         <section className="panel analysis-panel" aria-label="Phrase analysis">
           <div className="panel-heading analysis-heading"><p className="eyebrow">04 / WHAT HAPPENED</p><h2>Phrase evidence</h2></div>
-          {resolutions.length === 0 ? (
-            <p className="analysis-empty">{transport.mode === 'recording' ? 'Stop the take to see resolutions.' : 'Record a piano, MIDI, or sax take, or load the example to see specific resolutions.'}</p>
+          {phraseEvidence.length === 0 ? (
+            <p className="analysis-empty">{transport.mode === 'recording' ? 'Stop the take to see phrase evidence.' : 'Record a piano, MIDI, or sax take, or load the example to inspect phrase evidence.'}</p>
           ) : (
-            <div className="evidence-list">
-              {resolutions.map((resolution) => (
-                <button
-                  key={resolution.id}
-                  className={`evidence-card ${resolution.kind === 'none' ? 'neutral' : resolution.kind} ${selectedId === resolution.id ? 'selected' : ''}`}
-                  aria-pressed={selectedId === resolution.id}
-                  onClick={() => selectResolution(resolution.id)}
-                >
-                  <span>{resolution.kind === 'none' ? 'OPEN QUESTION' : 'RESOLUTION FOUND'}</span>
-                  <strong>{resolution.title}</strong>
-                  <small>{resolution.explanation}</small>
-                </button>
-              ))}
-            </div>
-          )}
-          {selectedPassage && (
-            <div className="selected-passage" id="selected-passage">
-              <p className="eyebrow">SELECTED PASSAGE · {formatPosition(selectedPassage.startBeat)}</p>
-              <strong>{selectedPassage.title}</strong>
-              <p>{selectedPassage.explanation}</p>
-              <div className="selected-actions">
-                <button onClick={replaySelected} disabled={transport.mode !== 'stopped'}>Replay at 60% speed</button>
-                <button onClick={() => practiceSelected('piano')} disabled={transport.mode !== 'stopped' || mic.requesting}>Try with piano</button>
-                <button onClick={() => practiceSelected('midi')} disabled={!midi.connected || transport.mode !== 'stopped'}>Try with MIDI</button>
-                <button onClick={() => practiceSelected('mic')} disabled={!mic.supported || transport.mode !== 'stopped' || mic.requesting}>Try with mic</button>
-              </div>
-              {!midi.connected && <small>Use the on-screen piano, connect MIDI, or record with the sax microphone.</small>}
-            </div>
+            <>
+              {selectedNote || selectedPassage ? (
+                <div className="selected-passage" id="selected-passage">
+                  {selectedNote ? (
+                    <>
+                      <p className="eyebrow">SELECTED NOTE · {formatPosition(selectedNote.startBeat)}</p>
+                      <strong>{spellNoteWithOctave(selectedNote.pitch, chordAtBeat(selectedNote.startBeat, progression))} on {chordAtBeat(selectedNote.startBeat, progression).name}</strong>
+                      <p className="selected-note-count">{selectedNoteEvidence.length} related {selectedNoteEvidence.length === 1 ? 'observation' : 'observations'}</p>
+                      {selectedNoteEvidence.length > 1 && (
+                        <div className="selected-note-evidence" aria-label="Related evidence for selected note">
+                          {selectedNoteEvidence.map((item) => (
+                            <button key={item.id} type="button" className={item.kind === 'no-nearby-resolution' ? 'neutral' : ''} aria-pressed={selectedEvidenceId === item.id} onClick={() => selectEvidence(item.id, selectedNote.id)}>{item.title}</button>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  ) : <p className="eyebrow">SELECTED PASSAGE · {formatPosition(selectedPassage!.startBeat)}</p>}
+                  {selectedPassage ? (
+                    <>
+                      <div className="selected-evidence-detail">
+                        <span>{selectedPassage.kind === 'no-nearby-resolution' ? 'NEUTRAL OBSERVATION' : selectedPassage.kind === 'change-landing' ? 'CHORD CHANGE' : 'DETECTED MOVE'}</span>
+                        <h3>{selectedPassage.title}</h3>
+                        <p>{selectedPassage.explanation}</p>
+                      </div>
+                      <div className="selected-actions">
+                        <button onClick={replaySelected} disabled={transport.mode !== 'stopped'}>Replay at 60% speed</button>
+                        <button onClick={() => practiceSelected('piano')} disabled={transport.mode !== 'stopped' || mic.requesting}>Try with piano</button>
+                        <button onClick={() => practiceSelected('midi')} disabled={!midi.connected || transport.mode !== 'stopped'}>Try with MIDI</button>
+                        <button onClick={() => practiceSelected('mic')} disabled={!mic.supported || transport.mode !== 'stopped' || mic.requesting}>Try with mic</button>
+                      </div>
+                      {!midi.connected && <small>Use the on-screen piano, connect MIDI, or record with the sax microphone.</small>}
+                    </>
+                  ) : <p>No phrase evidence is linked to this note.</p>}
+                </div>
+              ) : <p className="analysis-prompt">Select a note or arrow on the piano roll to inspect a passage.</p>}
+              <details className="evidence-overview">
+                <summary>All phrase evidence <span>{phraseEvidence.length}</span></summary>
+                <div className="evidence-list">
+                  {phraseEvidence.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`evidence-row ${item.kind === 'no-nearby-resolution' ? 'neutral' : item.kind} ${selectedEvidenceId === item.id ? 'selected' : ''}`}
+                      aria-pressed={selectedEvidenceId === item.id}
+                      onClick={() => selectEvidence(item.id)}
+                    >
+                      <strong>{item.title}</strong><small>{formatPosition(item.startBeat)}</small>
+                    </button>
+                  ))}
+                </div>
+              </details>
+            </>
           )}
           <section className="coach-section" aria-label="Practice plan">
             <div className="coach-heading">

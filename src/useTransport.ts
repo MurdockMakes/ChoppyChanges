@@ -146,6 +146,7 @@ export function useTransport(onAdvance?: (previousBeat: number, beat: number, mo
     mode, modeRef, beat, beatRef, getBeat, start, stop, seek, pauseReplay, resumeReplay, changeReplayRate,
     metronome, setMetronome, chordCues, setChordCues,
     playNote: (pitch: number, seconds: number) => engineRef.current.playNote(pitch, seconds),
+    prepareAudio: () => engineRef.current.resume(),
     pianoNoteOn: (pitch: number) => {
       void engineRef.current.resume();
       engineRef.current.noteOn(pitch);
