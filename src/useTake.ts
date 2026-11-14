@@ -1,48 +1,39 @@
 import { useCallback, useRef, useState } from 'react';
 import { EXAMPLE_TAKE } from './example';
+import { TakeNoteCapture } from './takeRecording';
 import type { NoteEvent } from './theory';
 import type { useTransport } from './useTransport';
 
 type Transport = ReturnType<typeof useTransport>;
-export type TakeSource = 'midi' | 'mic' | 'example' | null;
+export type TakeSource = 'midi' | 'mic' | 'piano' | 'example' | null;
+type LiveNoteSource = 'midi' | 'piano';
 
 export function useTake(transport: Transport) {
   const [notes, setNotes] = useState<NoteEvent[]>([]);
   const [pending, setPending] = useState<NoteEvent[]>([]);
   const [source, setSource] = useState<TakeSource>(null);
   const sourceRef = useRef<TakeSource>(null);
-  const heldRef = useRef(new Map<number, NoteEvent>());
-  const sequenceRef = useRef(0);
+  const captureRef = useRef(new TakeNoteCapture());
 
-  const finishNote = useCallback((pitch: number, atBeat: number) => {
-    const started = heldRef.current.get(pitch);
-    if (!started) return;
-    heldRef.current.delete(pitch);
-    const completed = { ...started, durationBeats: Math.max(0.08, atBeat - started.startBeat) };
-    setNotes((previous) => [...previous, completed].sort((a, b) => a.startBeat - b.startBeat));
-    setPending([...heldRef.current.values()]);
+  const addCompleted = useCallback((completed: NoteEvent | null) => {
+    if (completed) setNotes((previous) => [...previous, completed].sort((a, b) => a.startBeat - b.startBeat));
   }, []);
 
-  const noteOn = useCallback((pitch: number) => {
-    if (transport.modeRef.current !== 'recording' || sourceRef.current !== 'midi') return;
+  const noteOn = useCallback((pitch: number, input: LiveNoteSource = 'midi') => {
+    if (transport.modeRef.current !== 'recording' || sourceRef.current !== input) return;
     const atBeat = transport.getBeat();
-    finishNote(pitch, atBeat);
-    heldRef.current.set(pitch, {
-      id: `take-${sequenceRef.current++}`,
-      pitch,
-      startBeat: atBeat,
-      durationBeats: 0,
-    });
-    setPending([...heldRef.current.values()]);
-  }, [finishNote, transport]);
+    addCompleted(captureRef.current.noteOn(pitch, atBeat));
+    setPending(captureRef.current.pending());
+  }, [addCompleted, transport]);
 
-  const noteOff = useCallback((pitch: number) => {
-    if (transport.modeRef.current !== 'recording' || sourceRef.current !== 'midi') return;
-    finishNote(pitch, transport.getBeat());
-  }, [finishNote, transport]);
+  const noteOff = useCallback((pitch: number, input: LiveNoteSource = 'midi') => {
+    if (transport.modeRef.current !== 'recording' || sourceRef.current !== input) return;
+    addCompleted(captureRef.current.noteOff(pitch, transport.getBeat()));
+    setPending(captureRef.current.pending());
+  }, [addCompleted, transport]);
 
-  const startTake = useCallback(async (fromBeat = 0, rate = 1, input: 'midi' | 'mic' = 'midi') => {
-    heldRef.current.clear();
+  const startTake = useCallback(async (fromBeat = 0, rate = 1, input: 'midi' | 'mic' | 'piano' = 'midi') => {
+    captureRef.current.reset();
     setNotes([]);
     setPending([]);
     sourceRef.current = input;
@@ -63,14 +54,16 @@ export function useTake(transport: Transport) {
 
   const stopTake = useCallback(() => {
     const atBeat = transport.getBeat();
-    for (const pitch of [...heldRef.current.keys()]) finishNote(pitch, atBeat);
+    const completed = captureRef.current.finishAll(atBeat);
+    if (completed.length) setNotes((previous) => [...previous, ...completed].sort((a, b) => a.startBeat - b.startBeat));
+    setPending([]);
     transport.stop();
-  }, [finishNote, transport]);
+  }, [transport]);
 
   const loadExample = useCallback((example: readonly NoteEvent[] = EXAMPLE_TAKE) => {
     transport.stop();
     transport.seek(0);
-    heldRef.current.clear();
+    captureRef.current.reset();
     setPending([]);
     setNotes(example.map((note) => ({ ...note })));
     sourceRef.current = 'example';
@@ -80,7 +73,7 @@ export function useTake(transport: Transport) {
   const clearTake = useCallback(() => {
     transport.stop();
     transport.seek(0);
-    heldRef.current.clear();
+    captureRef.current.reset();
     setPending([]);
     setNotes([]);
     sourceRef.current = null;
@@ -90,7 +83,7 @@ export function useTake(transport: Transport) {
   const restoreTake = useCallback((restoredNotes: readonly NoteEvent[], restoredSource: TakeSource) => {
     transport.stop();
     transport.seek(0);
-    heldRef.current.clear();
+    captureRef.current.reset();
     setPending([]);
     setNotes(restoredNotes.map((note) => ({ ...note })));
     sourceRef.current = restoredSource;

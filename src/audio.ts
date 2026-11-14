@@ -28,6 +28,7 @@ export function chordVoicing(chord: ChordInfo): readonly number[] {
 export class AudioEngine {
   private context: AudioContext | null = null;
   private oscillators = new Set<OscillatorNode>();
+  private voices = new Map<number, { oscillator: OscillatorNode; envelope: GainNode }>();
 
   async resume() {
     if (!this.context && 'AudioContext' in window) this.context = new AudioContext();
@@ -69,10 +70,52 @@ export class AudioEngine {
     this.tone(pitch, Math.max(0.08, seconds), 0.12, 'triangle', 0.012);
   }
 
-  stopAll() {
+  /** Starts a piano voice that lasts until noteOff, independent of timed cues. */
+  noteOn(pitch: number) {
+    const context = this.context;
+    if (!context) return;
+    this.noteOff(pitch);
+    const now = context.currentTime;
+    const oscillator = context.createOscillator();
+    const envelope = context.createGain();
+    oscillator.type = 'triangle';
+    oscillator.frequency.value = 440 * 2 ** ((pitch - 69) / 12);
+    envelope.gain.setValueAtTime(0.0001, now);
+    envelope.gain.exponentialRampToValueAtTime(0.12, now + 0.012);
+    oscillator.connect(envelope).connect(context.destination);
+    const voice = { oscillator, envelope };
+    this.voices.set(pitch, voice);
+    oscillator.onended = () => {
+      oscillator.disconnect();
+      envelope.disconnect();
+      if (this.voices.get(pitch) === voice) this.voices.delete(pitch);
+    };
+    oscillator.start(now);
+  }
+
+  noteOff(pitch: number) {
+    const voice = this.voices.get(pitch);
+    if (!voice || !this.context) return;
+    this.voices.delete(pitch);
+    const now = this.context.currentTime;
+    voice.envelope.gain.cancelScheduledValues(now);
+    voice.envelope.gain.setTargetAtTime(0.0001, now, 0.018);
+    voice.oscillator.stop(now + 0.09);
+  }
+
+  /** Stop scheduled metronome, chord, and replay tones without cutting held keys. */
+  stopTimed() {
     for (const oscillator of this.oscillators) {
       try { oscillator.stop(); } catch { /* already stopped */ }
     }
     this.oscillators.clear();
+  }
+
+  stopAll() {
+    this.stopTimed();
+    for (const { oscillator } of this.voices.values()) {
+      try { oscillator.stop(); } catch { /* already stopped */ }
+    }
+    this.voices.clear();
   }
 }
