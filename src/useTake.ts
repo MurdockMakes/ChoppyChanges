@@ -16,11 +16,17 @@ export function useTake(transport: Transport) {
   const captureRef = useRef(new TakeNoteCapture());
 
   const addCompleted = useCallback((completed: NoteEvent | null) => {
-    if (completed) setNotes((previous) => [...previous, completed].sort((a, b) => a.startBeat - b.startBeat));
-  }, []);
+    if (!completed) return;
+    const limit = transport.getLimitBeat();
+    const durationBeats = limit === null ? completed.durationBeats : Math.min(completed.durationBeats, limit - completed.startBeat);
+    if (durationBeats <= 0) return;
+    const bounded = durationBeats === completed.durationBeats ? completed : { ...completed, durationBeats };
+    setNotes((previous) => [...previous, bounded].sort((a, b) => a.startBeat - b.startBeat));
+  }, [transport]);
 
   const noteOn = useCallback((pitch: number, input: LiveNoteSource = 'midi') => {
     if (transport.modeRef.current !== 'recording' || sourceRef.current !== input) return;
+    if (transport.isAtLimit()) return;
     const atBeat = transport.getBeat();
     addCompleted(captureRef.current.noteOn(pitch, atBeat));
     setPending(captureRef.current.pending());
@@ -52,12 +58,11 @@ export function useTake(transport: Transport) {
 
   const setPendingNotes = useCallback((updated: NoteEvent[]) => setPending(updated), []);
 
-  const stopTake = useCallback(() => {
-    const atBeat = transport.getBeat();
+  const stopTake = useCallback((atBeat = transport.getBeat()) => {
     const completed = captureRef.current.finishAll(atBeat);
     if (completed.length) setNotes((previous) => [...previous, ...completed].sort((a, b) => a.startBeat - b.startBeat));
     setPending([]);
-    transport.stop();
+    transport.stop(atBeat);
   }, [transport]);
 
   const loadExample = useCallback((example: readonly NoteEvent[] = EXAMPLE_TAKE) => {

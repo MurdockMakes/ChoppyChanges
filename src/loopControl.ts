@@ -1,12 +1,22 @@
 import { BEATS_PER_BAR, type Progression } from './theory.ts';
 
-export type BluesRepeatMode = 'once' | 'count' | 'continuous';
+export const MAX_PASSES = 16;
 
-/** Absolute transport beat where a finite blues practice run ends. */
-export function bluesEndBeat(progression: Progression, fromBeat: number, mode: BluesRepeatMode, count: number): number | null {
-  if (progression.form !== 'blues' || mode === 'continuous') return null;
+export function normalizePassCount(value: number): number {
+  return Number.isFinite(value) ? Math.max(1, Math.min(MAX_PASSES, Math.floor(value))) : 1;
+}
+
+/** Begin a coached retry on a bar line, with at least one beat before the target. */
+export function practiceRunStartBeat(passageStartBeat: number): number {
+  return Math.floor(Math.max(0, passageStartBeat - 1) / BEATS_PER_BAR) * BEATS_PER_BAR;
+}
+
+/** Absolute transport beat after a complete traversal for each selected pass. */
+export function progressionEndBeat(progression: Progression, fromBeat: number, passes: number): number {
+  return Math.max(0, fromBeat) + progression.chords.length * BEATS_PER_BAR * normalizePassCount(passes);
+}
+
+export function passAtBeat(progression: Progression, fromBeat: number, beat: number, passes: number): number {
   const cycleBeats = progression.chords.length * BEATS_PER_BAR;
-  const passes = mode === 'once' ? 1 : Math.max(2, Math.min(16, Math.floor(Number.isFinite(count) ? count : 2)));
-  const currentCycle = Math.floor(Math.max(0, fromBeat) / cycleBeats);
-  return (currentCycle + passes) * cycleBeats;
+  return Math.min(normalizePassCount(passes), Math.floor(Math.max(0, beat - fromBeat) / cycleBeats) + 1);
 }

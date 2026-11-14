@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AudioEngine } from './audio';
 import { BEATS_PER_BAR, BPM, chordAtBeat, DEFAULT_PROGRESSION, type Progression } from './theory';
+import { countInPulses, transportFrame } from './transportTiming';
 
 export type TransportMode = 'stopped' | 'counting-in' | 'playing' | 'recording' | 'replaying' | 'paused';
 type RunningMode = 'playing' | 'recording' | 'replaying';
@@ -29,6 +30,8 @@ export function useTransport(
   const originRef = useRef(0);
   const rateRef = useRef(1);
   const clockVersionRef = useRef(0);
+  const startIdRef = useRef(0);
+  const audioReadyRef = useRef(true);
   const untilRef = useRef<number | null>(null);
   const beatRef = useRef(0);
   const metronomeRef = useRef(true);
@@ -43,9 +46,13 @@ export function useTransport(
 
   const getBeat = useCallback(() => {
     if (modeRef.current === 'stopped' || modeRef.current === 'paused') return beatRef.current;
+    if (!audioReadyRef.current) return beatRef.current;
     const liveBeat = ((performance.now() - originRef.current) / MS_PER_BEAT) * rateRef.current;
-    return modeRef.current === 'counting-in' ? liveBeat : Math.max(0, liveBeat);
+    return modeRef.current === 'counting-in' ? liveBeat : Math.min(untilRef.current ?? Infinity, Math.max(0, liveBeat));
   }, []);
+
+  const isAtLimit = useCallback(() => untilRef.current !== null && getBeat() >= untilRef.current, [getBeat]);
+  const getLimitBeat = useCallback(() => untilRef.current, []);
 
   const restartClock = useCallback(() => {
     clockVersionRef.current += 1;
@@ -53,7 +60,10 @@ export function useTransport(
   }, []);
 
   const stop = useCallback((atBeat?: number) => {
-    beatRef.current = modeRef.current === 'counting-in' ? countInEndBeatRef.current : atBeat ?? getBeat();
+    const finalBeat = modeRef.current === 'counting-in' ? countInEndBeatRef.current : atBeat ?? getBeat();
+    startIdRef.current += 1;
+    audioReadyRef.current = true;
+    beatRef.current = finalBeat;
     modeRef.current = 'stopped';
     untilRef.current = null;
     setCountInRemaining(0);
@@ -109,8 +119,10 @@ export function useTransport(
   }, [getBeat, restartClock]);
 
   const start = useCallback(async (nextMode: RunningMode, fromBeat = 0, rate = 1, untilBeat: number | null = null, countInBeats = 0) => {
+    const startId = ++startIdRef.current;
     engineRef.current.stopTimed();
     const audioReady = engineRef.current.resume();
+    audioReadyRef.current = false;
     rateRef.current = rate;
     const lead = Math.max(0, Math.floor(countInBeats));
     originRef.current = performance.now() - ((fromBeat - lead) * MS_PER_BEAT) / rate;
@@ -124,11 +136,20 @@ export function useTransport(
     setBeat(fromBeat);
     setCountInRemaining(lead);
     setMode(modeRef.current);
-    await audioReady;
-  }, [restartClock]);
+    try {
+      await audioReady;
+      if (startId !== startIdRef.current) return;
+      // The four clicks start from a fresh origin after the output is audible.
+      originRef.current = performance.now() - ((fromBeat - lead) * MS_PER_BEAT) / rate;
+      audioReadyRef.current = true;
+      restartClock();
+    } catch {
+      if (startId === startIdRef.current) stop();
+    }
+  }, [restartClock, stop]);
 
   useEffect(() => {
-    if (mode === 'stopped' || mode === 'paused') return;
+    if (mode === 'stopped' || mode === 'paused' || !audioReadyRef.current) return;
     let frame = 0;
     const version = clockVersionRef.current;
     let previousBeat = beatRef.current;
@@ -136,12 +157,14 @@ export function useTransport(
     const tick = () => {
       if (modeRef.current !== mode || version !== clockVersionRef.current) return;
       const nowBeat = getBeat();
-      if (mode === 'counting-in') {
+      const currentFrame = transportFrame(mode, nowBeat, countInEndBeatRef.current, untilRef.current);
+      if (currentFrame.phase === 'count-in' || currentFrame.phase === 'start') {
         const startBeat = countInEndBeatRef.current;
-        for (; nextPulse < startBeat && nextPulse <= nowBeat; nextPulse += 1) {
-          engineRef.current.click(nextPulse === startBeat - countInBeatsRef.current);
+        for (const pulse of countInPulses(nextPulse, nowBeat, startBeat)) {
+          engineRef.current.click(pulse === startBeat - countInBeatsRef.current);
+          nextPulse = pulse + 1;
         }
-        if (nowBeat >= startBeat) {
+        if (currentFrame.phase === 'start') {
           const targetMode = targetModeRef.current;
           beatRef.current = startBeat;
           modeRef.current = targetMode;
@@ -156,12 +179,11 @@ export function useTransport(
         frame = requestAnimationFrame(tick);
         return;
       }
-      const until = untilRef.current;
-      if (until !== null && nowBeat >= until) {
-        advanceRef.current?.(previousBeat, until, mode, engineRef.current);
-        beatRef.current = until;
-        stop(until);
-        limitCallbackRef.current?.(mode as RunningMode, until);
+      if (currentFrame.phase === 'limit') {
+        advanceRef.current?.(previousBeat, currentFrame.beat, mode, engineRef.current);
+        beatRef.current = currentFrame.beat;
+        stop(currentFrame.beat);
+        limitCallbackRef.current?.(mode as RunningMode, currentFrame.beat);
         return;
       }
       for (; nextPulse <= Math.floor(nowBeat); nextPulse += 1) {
@@ -185,7 +207,7 @@ export function useTransport(
   }, []);
 
   return {
-    mode, modeRef, beat, beatRef, countInRemaining, getBeat, start, stop, seek, pauseReplay, resumeReplay, changeReplayRate,
+    mode, modeRef, beat, beatRef, countInRemaining, getBeat, getLimitBeat, isAtLimit, start, stop, seek, pauseReplay, resumeReplay, changeReplayRate,
     metronome, setMetronome, chordCues, setChordCues,
     playNote: (pitch: number, seconds: number) => engineRef.current.playNote(pitch, seconds),
     prepareAudio: () => engineRef.current.resume(),

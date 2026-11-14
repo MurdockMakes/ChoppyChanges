@@ -58,3 +58,11 @@ test('stop finalizes all held notes and reset discards them', () => {
   assert.deepEqual(capture.pending(), []);
   assert.equal(capture.noteOff(72, 6), null);
 });
+
+test('a note held through the final bar is clipped to the exact run boundary', () => {
+  const capture = new TakeNoteCapture();
+  capture.noteOn(72, 31.98);
+  assert.deepEqual(capture.finishAll(32).map((note) => [note.startBeat, note.startBeat + note.durationBeats]), [
+    [31.98, 32],
+  ]);
+});

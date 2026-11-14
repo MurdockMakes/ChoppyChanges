@@ -28,7 +28,11 @@ export class TakeNoteCapture {
   }
 
   finishAll(atBeat: number): NoteEvent[] {
-    return [...this.held.keys()].map((pitch) => this.noteOff(pitch, atBeat)!).sort((a, b) => a.startBeat - b.startBeat);
+    return [...this.held.keys()]
+      .map((pitch) => this.noteOff(pitch, atBeat)!)
+      .map((note) => ({ ...note, durationBeats: Math.max(0, atBeat - note.startBeat) }))
+      .filter((note) => note.durationBeats > 0)
+      .sort((a, b) => a.startBeat - b.startBeat);
   }
 
   pending() {
