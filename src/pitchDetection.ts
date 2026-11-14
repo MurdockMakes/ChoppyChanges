@@ -9,7 +9,7 @@ export interface PitchEstimate {
  * Estimates a single, sustained pitch from a mono PCM window.
  *
  * The cumulative mean normalized difference follows de Cheveigné and
- * Kawahara's YIN method. Downsampling by two keeps a 4096-sample mic frame
+ * Kawahara's YIN method. Downsampling by two keeps an 8192-sample mic frame
  * practical to analyze about 30 times a second on a demo laptop.
  */
 export function detectPitch(

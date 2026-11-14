@@ -77,3 +77,63 @@ export class TakeReplay {
     this.started.clear();
   }
 }
+
+/** Replays the microphone recording while the transport drives the visual playhead. */
+export class RecordedAudioReplay {
+  private playing = false;
+  private disposed = false;
+  private readonly audio: HTMLAudioElement;
+  private readonly recordedFromBeat: number;
+  private readonly recordedRate: number;
+  private readonly release: () => void;
+
+  constructor(
+    audio: HTMLAudioElement,
+    recordedFromBeat: number,
+    recordedRate: number,
+    release: () => void,
+  ) {
+    this.audio = audio;
+    this.recordedFromBeat = recordedFromBeat;
+    this.recordedRate = recordedRate;
+    this.release = release;
+    this.audio.preload = 'auto';
+    this.audio.preservesPitch = true;
+  }
+
+  private sync(beat: number, rate: number) {
+    this.audio.playbackRate = rate / this.recordedRate;
+    this.audio.currentTime = Math.max(0, (beat - this.recordedFromBeat) * (60 / BPM) / this.recordedRate);
+    if (this.playing) {
+      this.audio.muted = beat < this.recordedFromBeat;
+      void this.audio.play().catch(() => {});
+    } else this.audio.pause();
+  }
+
+  start(beat: number, rate: number) {
+    this.playing = true;
+    this.sync(beat, rate);
+  }
+
+  advance(previousBeat: number, beat: number) {
+    if (this.playing && previousBeat < this.recordedFromBeat && beat >= this.recordedFromBeat) {
+      this.sync(beat, this.audio.playbackRate * this.recordedRate);
+    }
+  }
+
+  pause() {
+    this.playing = false;
+    this.audio.pause();
+  }
+
+  seek(beat: number, rate: number) { this.sync(beat, rate); }
+
+  stop() {
+    this.playing = false;
+    this.audio.pause();
+    if (!this.disposed) {
+      this.disposed = true;
+      this.release();
+    }
+  }
+}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { BPM, type NoteEvent } from './theory.ts';
-import { TakeReplay, takeEndBeat } from './takeReplay.ts';
+import { RecordedAudioReplay, TakeReplay, takeEndBeat } from './takeReplay.ts';
 
 const note = (id: string, pitch: number, startBeat: number, durationBeats: number): NoteEvent => (
   { id, pitch, startBeat, durationBeats }
@@ -72,4 +72,28 @@ test('pause, seek, and stop clear voices; seek resumes only when playing', () =>
   assert.equal(stopCount(), 6);
   replay.advance(3.5, 4);
   assert.equal(played.length, 4);
+});
+
+test('recorded audio follows beat seeks and playback speed, then releases its URL', () => {
+  let plays = 0;
+  let releases = 0;
+  const audio = {
+    currentTime: 0, playbackRate: 1, preload: '', preservesPitch: false, muted: false,
+    play: () => { plays += 1; return Promise.resolve(); },
+    pause: () => {},
+  } as unknown as HTMLAudioElement;
+  const replay = new RecordedAudioReplay(audio, 4, 0.75, () => { releases += 1; });
+  replay.start(3, 1);
+  assert.equal(plays, 1);
+  assert.equal(audio.muted, true);
+  replay.advance(3.9, 4);
+  assert.equal(plays, 2);
+  assert.equal(audio.muted, false);
+  replay.seek(5.5, 0.5);
+  assert.ok(Math.abs(audio.currentTime - (1.5 * 60 / BPM / 0.75)) < 1e-9);
+  assert.ok(Math.abs(audio.playbackRate - (0.5 / 0.75)) < 1e-9);
+  replay.pause();
+  replay.stop();
+  replay.stop();
+  assert.equal(releases, 1);
 });

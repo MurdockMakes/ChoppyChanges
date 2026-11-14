@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { detectPitch } from './pitchDetection';
+import { SaxPitchTracker } from './sax';
 
 export interface MicFrame {
   pitch: number | null;
   frequencyHz: number | null;
   confidence: number;
   rms: number;
+  windowSeconds: number;
 }
 
 export interface MicrophoneState extends MicFrame {
@@ -31,15 +33,45 @@ export function useMicrophone(onFrame: (frame: MicFrame) => void, onEnded?: () =
   const analyserRef = useRef<AnalyserNode | null>(null);
   const frameRef = useRef(0);
   const activeRef = useRef(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const captureRef = useRef<Promise<Blob | null> | null>(null);
   const supported = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia && typeof AudioContext !== 'undefined';
   const [state, setState] = useState<MicrophoneState>({
     supported, active: false, requesting: false, status: supported ? MIC_READY : MIC_UNAVAILABLE,
-    pitch: null, frequencyHz: null, confidence: 0, rms: 0,
+    pitch: null, frequencyHz: null, confidence: 0, rms: 0, windowSeconds: 0,
   });
+
+  const finishCapture = useCallback((): Promise<Blob | null> => {
+    const recorder = recorderRef.current;
+    if (recorder?.state === 'recording') recorder.stop();
+    return captureRef.current ?? Promise.resolve(null);
+  }, []);
+
+  const startCapture = useCallback((): boolean => {
+    const stream = streamRef.current;
+    if (!stream || typeof MediaRecorder === 'undefined') return false;
+    try {
+      const recorder = new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+      captureRef.current = new Promise((resolve) => {
+        recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+        recorder.onerror = () => resolve(null);
+        recorder.onstop = () => resolve(chunks.length ? new Blob(chunks, { type: recorder.mimeType || chunks[0].type }) : null);
+      });
+      recorderRef.current = recorder;
+      recorder.start();
+      return true;
+    } catch {
+      recorderRef.current = null;
+      captureRef.current = null;
+      return false;
+    }
+  }, []);
 
   const stop = useCallback((message = supported ? MIC_READY : MIC_UNAVAILABLE) => {
     tokenRef.current += 1;
     activeRef.current = false;
+    void finishCapture();
     cancelAnimationFrame(frameRef.current);
     frameRef.current = 0;
     sourceRef.current?.disconnect();
@@ -54,7 +86,7 @@ export function useMicrophone(onFrame: (frame: MicFrame) => void, onEnded?: () =
     if (contextRef.current) void contextRef.current.close();
     contextRef.current = null;
     setState((previous) => ({ ...previous, active: false, requesting: false, pitch: null, frequencyHz: null, confidence: 0, rms: 0, status: message }));
-  }, [supported]);
+  }, [finishCapture, supported]);
 
   const start = useCallback(async (): Promise<boolean> => {
     if (!supported) {
@@ -84,7 +116,7 @@ export function useMicrophone(onFrame: (frame: MicFrame) => void, onEnded?: () =
       }
       const source = context.createMediaStreamSource(stream);
       const analyser = context.createAnalyser();
-      analyser.fftSize = 4096;
+      analyser.fftSize = 8192;
       analyser.smoothingTimeConstant = 0;
       source.connect(analyser);
       const samples = new Float32Array(analyser.fftSize);
@@ -98,6 +130,7 @@ export function useMicrophone(onFrame: (frame: MicFrame) => void, onEnded?: () =
       let lastSampleMs = -Infinity;
       let lastUiMs = -Infinity;
       let lastPitch: number | null = null;
+      const tracker = new SaxPitchTracker();
       const poll = (timeMs: number) => {
         if (token !== tokenRef.current || !activeRef.current) return;
         if (timeMs - lastSampleMs >= 34) {
@@ -107,12 +140,14 @@ export function useMicrophone(onFrame: (frame: MicFrame) => void, onEnded?: () =
           for (const sample of samples) power += sample * sample;
           const rms = Math.sqrt(power / samples.length);
           const estimate = detectPitch(samples, context!.sampleRate);
-          const pitch = estimate ? Math.max(0, Math.min(127, Math.round(69 + 12 * Math.log2(estimate.frequencyHz / 440)))) : null;
+          const estimatedPitch = estimate ? Math.max(0, Math.min(127, Math.round(69 + 12 * Math.log2(estimate.frequencyHz / 440)))) : null;
+          const pitch = tracker.observe(estimatedPitch);
           const frame: MicFrame = {
             pitch,
             frequencyHz: estimate?.frequencyHz ?? null,
             confidence: estimate?.confidence ?? 0,
             rms,
+            windowSeconds: samples.length / context!.sampleRate,
           };
           callbackRef.current(frame);
           if (pitch !== lastPitch || timeMs - lastUiMs >= 130) {
@@ -149,6 +184,7 @@ export function useMicrophone(onFrame: (frame: MicFrame) => void, onEnded?: () =
 
   useEffect(() => () => {
     tokenRef.current += 1;
+    void finishCapture();
     cancelAnimationFrame(frameRef.current);
     sourceRef.current?.disconnect();
     analyserRef.current?.disconnect();
@@ -157,7 +193,7 @@ export function useMicrophone(onFrame: (frame: MicFrame) => void, onEnded?: () =
       track.stop();
     }
     if (contextRef.current) void contextRef.current.close();
-  }, []);
+  }, [finishCapture]);
 
-  return { ...state, start, stop };
+  return { ...state, start, stop, startCapture, finishCapture };
 }

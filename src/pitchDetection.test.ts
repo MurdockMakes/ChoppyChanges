@@ -25,6 +25,19 @@ test('tracks a low note with strong harmonics', () => {
   assert.ok(Math.abs(estimate.frequencyHz - 110) < 2, `estimated ${estimate.frequencyHz} Hz`);
 });
 
+test('longer sax window resolves a low tenor note with a weak fundamental', () => {
+  const frequencyHz = 103.826;
+  const samples = Float32Array.from({ length: 8192 }, (_, index) => {
+    const t = index / SAMPLE_RATE;
+    return 0.07 * Math.sin(2 * Math.PI * frequencyHz * t)
+      + 0.26 * Math.sin(4 * Math.PI * frequencyHz * t)
+      + 0.18 * Math.sin(6 * Math.PI * frequencyHz * t);
+  });
+  const estimate = detectPitch(samples, SAMPLE_RATE);
+  assert.ok(estimate);
+  assert.ok(Math.abs(estimate.frequencyHz - frequencyHz) < 2, `estimated ${estimate.frequencyHz} Hz`);
+});
+
 test('rejects silence and nonperiodic noise', () => {
   assert.equal(detectPitch(new Float32Array(SIZE), SAMPLE_RATE), null);
   let seed = 12345;

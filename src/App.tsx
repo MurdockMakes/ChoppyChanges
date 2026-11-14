@@ -8,24 +8,33 @@ import PianoRoll from './PianoRoll';
 import type { AudioEngine } from './audio';
 import { MicNoteSegmenter } from './micSegmentation';
 import { useMicrophone, type MicFrame } from './useMicrophone';
+import { saxWrittenChord, saxWrittenKey, saxWrittenPitch, type SaxKey } from './sax';
 import TranscriptionEditor from './TranscriptionEditor';
 import { exampleTakeFor } from './example';
 import CircleOfFifths, { type CircleForm } from './CircleOfFifths';
 import { buildCoachContext, fallbackCoachPlan, passageForExercise, planExercise, planPriority, validateGeminiCoachResponse, type CoachEvidence, type CoachPlan } from './coach';
-import { TakeReplay, takeEndBeat } from './takeReplay';
+import { RecordedAudioReplay, TakeReplay, takeEndBeat } from './takeReplay';
 import { buildNoteEvidenceIndex } from './noteEvidence';
 
 type PassageTarget = Pick<Resolution, 'startBeat' | 'endBeat' | 'title' | 'explanation'>;
+type MicAudioTake = { blob: Blob; startBeat: number; endBeat: number; rate: number };
 
 export default function App() {
   const [progressionId, setProgressionId] = useState(DEFAULT_PROGRESSION.id);
   const progression = PROGRESSIONS.find((item) => item.id === progressionId) ?? DEFAULT_PROGRESSION;
-  const replaySessionRef = useRef<TakeReplay | null>(null);
+  const replaySessionRef = useRef<TakeReplay | RecordedAudioReplay | null>(null);
   const replayKindRef = useRef<'full' | 'passage' | null>(null);
   const replayStartIdRef = useRef(0);
   const fullCursorArmedRef = useRef(false);
   const [replayKind, setReplayKind] = useState<'full' | 'passage' | null>(null);
   const [fullReplayRate, setFullReplayRate] = useState(1);
+  const [replaySound, setReplaySound] = useState<'original' | 'notes'>('original');
+  const [saxKey, setSaxKey] = useState<SaxKey>('concert');
+  const [micAudio, setMicAudio] = useState<MicAudioTake | null>(null);
+  const [micAudioFinalizing, setMicAudioFinalizing] = useState(false);
+  const micCaptureEpochRef = useRef(0);
+  const micCaptureStartRef = useRef(0);
+  const micCaptureRateRef = useRef(1);
   const fullReplayRateRef = useRef(1);
   const advanceReplay = useCallback((previousBeat: number, beat: number, mode: TransportMode, _audio: AudioEngine) => {
     if (mode !== 'replaying') return;
@@ -33,15 +42,15 @@ export default function App() {
   }, []);
   const transport = useTransport(advanceReplay, progression);
   const take = useTake(transport);
-  const takesByProgressionRef = useRef<Record<string, { notes: NoteEvent[]; source: TakeSource }>>({});
+  const takesByProgressionRef = useRef<Record<string, { notes: NoteEvent[]; source: TakeSource; audio: MicAudioTake | null }>>({});
   const midi = useMidi((pitch) => take.noteOn(pitch, 'midi'), (pitch) => take.noteOff(pitch, 'midi'));
   const micSegmenterRef = useRef(new MicNoteSegmenter());
   const recordingInputRef = useRef<'midi' | 'mic' | 'piano' | null>(null);
   const [micLivePitch, setMicLivePitch] = useState<number | null>(null);
   const onMicFrame = (frame: MicFrame) => {
     if (transport.modeRef.current !== 'recording' || recordingInputRef.current !== 'mic') return;
-    // The analyser window is about 90 ms; place onsets near the middle of it.
-    const sampleBeat = Math.max(0, transport.getBeat() - 0.07);
+    // Timestamp the center of the analyser window, including slower practice takes.
+    const sampleBeat = Math.max(0, transport.getBeat() - frame.windowSeconds * (BPM / 120) * micCaptureRateRef.current);
     take.appendNotes(micSegmenterRef.current.observe(frame.pitch, sampleBeat));
     const current = micSegmenterRef.current.currentNote;
     take.setPendingNotes(current ? [current] : []);
@@ -49,13 +58,26 @@ export default function App() {
   };
   const onMicEnded = () => {
     if (recordingInputRef.current !== 'mic') return;
-    take.appendNotes(micSegmenterRef.current.finalize(transport.getBeat()));
+    const endBeat = transport.getBeat();
+    commitMicAudio(endBeat);
+    take.appendNotes(micSegmenterRef.current.finalize(endBeat));
     take.setPendingNotes([]);
     setMicLivePitch(null);
     recordingInputRef.current = null;
     take.stopTake();
   };
   const mic = useMicrophone(onMicFrame, onMicEnded);
+  function commitMicAudio(endBeat: number) {
+    const epoch = micCaptureEpochRef.current;
+    const startBeat = micCaptureStartRef.current;
+    const rate = micCaptureRateRef.current;
+    setMicAudioFinalizing(true);
+    void mic.finishCapture().then((blob) => {
+      if (epoch === micCaptureEpochRef.current && blob) setMicAudio({ blob, startBeat, endBeat, rate });
+    }).finally(() => {
+      if (epoch === micCaptureEpochRef.current) setMicAudioFinalizing(false);
+    });
+  }
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [practiceOf, setPracticeOf] = useState<PassageTarget | null>(null);
@@ -71,7 +93,10 @@ export default function App() {
   const selectedPassage: CoachEvidence | undefined = phraseEvidence.find((item) => item.id === selectedEvidenceId);
   const selectedNote = take.notes.find((note) => note.id === selectedNoteId);
   const selectedNoteEvidence = selectedNote ? noteEvidenceIndex.get(selectedNote.id) ?? [] : [];
-  const takeEnd = takeEndBeat(take.notes);
+  const takeEnd = Math.max(takeEndBeat(take.notes), micAudio?.endBeat ?? 0);
+  const saxConcertRoot = CIRCLE_KEYS.find((key) => key.id === progression.keyId)?.root ?? 0;
+  const saxConcertKey = CIRCLE_KEYS.find((key) => key.id === progression.keyId)?.label ?? 'C';
+  const writtenProgressionLabel = saxKey === 'concert' ? progression.label : progression.label.replace(saxConcertKey, saxWrittenKey(saxConcertRoot, saxKey));
 
   useEffect(() => {
     if (transport.mode !== 'stopped' || !replayKindRef.current) return;
@@ -166,24 +191,32 @@ export default function App() {
 
   async function startReplay(kind: 'full' | 'passage', notes: NoteEvent[], fromBeat: number, rate: number, untilBeat: number) {
     clearReplaySession();
-    const session = new TakeReplay(notes, transport.playNote, transport.stopTimed);
+    const session = take.source === 'mic' && micAudio && replaySound === 'original'
+      ? (() => {
+          const url = URL.createObjectURL(micAudio.blob);
+          return new RecordedAudioReplay(new Audio(url), micAudio.startBeat, micAudio.rate, () => URL.revokeObjectURL(url));
+        })()
+      : new TakeReplay(notes, transport.playNote, transport.stopTimed);
     replaySessionRef.current = session;
     replayKindRef.current = kind;
     setReplayKind(kind);
     const startId = replayStartIdRef.current;
     try {
+      // Start the recorded element inside the click gesture for browser autoplay rules.
+      if (session instanceof RecordedAudioReplay) session.start(fromBeat, rate);
       await transport.prepareAudio();
       if (startId !== replayStartIdRef.current || transport.modeRef.current !== 'stopped') return;
       await transport.start('replaying', fromBeat, rate, untilBeat);
       if (startId !== replayStartIdRef.current || !['replaying'].includes(transport.modeRef.current)) return;
-      session.start(transport.getBeat(), rate);
+      if (session instanceof RecordedAudioReplay) session.seek(transport.getBeat(), rate);
+      else session.start(transport.getBeat(), rate);
     } catch {
       if (startId === replayStartIdRef.current) stopReplay();
     }
   }
 
   function startFullReplay() {
-    if (transport.modeRef.current !== 'stopped' || takeEnd <= 0) return;
+    if (transport.modeRef.current !== 'stopped' || takeEnd <= 0 || micAudioFinalizing) return;
     const fromBeat = fullCursorArmedRef.current && transport.beat < takeEnd ? transport.beat : 0;
     fullCursorArmedRef.current = false;
     void startReplay('full', take.notes.slice(), fromBeat, fullReplayRateRef.current, takeEnd);
@@ -246,14 +279,16 @@ export default function App() {
   }, []);
 
   function switchProgression(nextId: string) {
-    if (transport.modeRef.current !== 'stopped' || mic.requesting || nextId === progression.id) return;
+    if (transport.modeRef.current !== 'stopped' || mic.requesting || micAudioFinalizing || nextId === progression.id) return;
     const next = PROGRESSIONS.find((item) => item.id === nextId);
     if (!next) return;
     clearReplaySession();
     fullCursorArmedRef.current = false;
     invalidateCoach();
-    takesByProgressionRef.current[progression.id] = { notes: take.notes.map((note) => ({ ...note })), source: take.source };
+    takesByProgressionRef.current[progression.id] = { notes: take.notes.map((note) => ({ ...note })), source: take.source, audio: micAudio };
     const saved = takesByProgressionRef.current[nextId];
+    micCaptureEpochRef.current += 1;
+    setMicAudio(saved?.audio ?? null);
     mic.stop();
     micSegmenterRef.current.reset();
     recordingInputRef.current = null;
@@ -301,7 +336,7 @@ export default function App() {
   }
 
   function replaySelected() {
-    if (!selectedPassage || transport.modeRef.current !== 'stopped') return;
+    if (!selectedPassage || transport.modeRef.current !== 'stopped' || micAudioFinalizing) return;
     const fromBeat = Math.max(0, selectedPassage.startBeat - 0.5);
     const untilBeat = selectedPassage.endBeat + 0.6;
     const notes = take.notes.filter((note) => note.startBeat < untilBeat && note.startBeat + note.durationBeats > fromBeat);
@@ -309,10 +344,12 @@ export default function App() {
   }
 
   function startMidiTake(fromBeat = 0, rate = 1, practiceTarget: PassageTarget | null = null) {
-    if (!midi.connected || transport.modeRef.current !== 'stopped') return;
+    if (!midi.connected || transport.modeRef.current !== 'stopped' || micAudioFinalizing) return;
     clearReplaySession();
     fullCursorArmedRef.current = false;
     invalidateCoach();
+    micCaptureEpochRef.current += 1;
+    setMicAudio(null);
     recordingInputRef.current = 'midi';
     setPracticeOf(practiceTarget);
     setSelectedEvidenceId(null);
@@ -321,10 +358,12 @@ export default function App() {
   }
 
   function startPianoTake(fromBeat = 0, rate = 1, practiceTarget: PassageTarget | null = null) {
-    if (transport.modeRef.current !== 'stopped' || mic.requesting) return;
+    if (transport.modeRef.current !== 'stopped' || mic.requesting || micAudioFinalizing) return;
     clearReplaySession();
     fullCursorArmedRef.current = false;
     invalidateCoach();
+    micCaptureEpochRef.current += 1;
+    setMicAudio(null);
     recordingInputRef.current = 'piano';
     setPracticeOf(practiceTarget);
     setSelectedEvidenceId(null);
@@ -333,12 +372,15 @@ export default function App() {
   }
 
   async function startMicTake(fromBeat = 0, rate = 1, practiceTarget: PassageTarget | null = null) {
-    if (transport.modeRef.current !== 'stopped') return;
+    if (transport.modeRef.current !== 'stopped' || micAudioFinalizing) return;
     clearReplaySession();
     fullCursorArmedRef.current = false;
     invalidateCoach();
     const started = await mic.start();
     if (!started) return;
+    micCaptureEpochRef.current += 1;
+    setMicAudio(null);
+    setReplaySound('original');
     micSegmenterRef.current.reset();
     recordingInputRef.current = 'mic';
     setMicLivePitch(null);
@@ -346,11 +388,18 @@ export default function App() {
     setSelectedEvidenceId(null);
     setSelectedNoteId(null);
     await take.startTake(fromBeat, rate, 'mic');
+    if ((transport.modeRef.current as TransportMode) === 'recording') {
+      micCaptureStartRef.current = transport.getBeat();
+      micCaptureRateRef.current = rate;
+      mic.startCapture();
+    }
   }
 
   function stopRecording() {
     if (recordingInputRef.current === 'mic') {
-      take.appendNotes(micSegmenterRef.current.finalize(transport.getBeat()));
+      const endBeat = transport.getBeat();
+      commitMicAudio(endBeat);
+      take.appendNotes(micSegmenterRef.current.finalize(endBeat));
       take.setPendingNotes([]);
       setMicLivePitch(null);
       mic.stop();
@@ -363,6 +412,9 @@ export default function App() {
     clearReplaySession();
     fullCursorArmedRef.current = false;
     invalidateCoach();
+    micCaptureEpochRef.current += 1;
+    setMicAudioFinalizing(false);
+    setMicAudio(null);
     mic.stop();
     micSegmenterRef.current.reset();
     recordingInputRef.current = null;
@@ -377,6 +429,9 @@ export default function App() {
     clearReplaySession();
     fullCursorArmedRef.current = false;
     invalidateCoach();
+    micCaptureEpochRef.current += 1;
+    setMicAudioFinalizing(false);
+    setMicAudio(null);
     mic.stop();
     micSegmenterRef.current.reset();
     recordingInputRef.current = null;
@@ -430,21 +485,28 @@ export default function App() {
             <div>
               <strong>Sax microphone</strong>
               <p role="status">{mic.status}</p>
-              {mic.active && <small>Heard: {micLivePitch !== null ? spellNoteWithOctave(micLivePitch, chord) : mic.rms > 0.02 ? 'sound detected · pitch uncertain' : 'listening…'}</small>}
+              {mic.active && <small>Heard: {micLivePitch !== null ? `${spellNoteWithOctave(micLivePitch, chord)} concert${saxKey === 'concert' ? '' : ` · ${spellNoteWithOctave(saxWrittenPitch(micLivePitch, saxKey))} written`}` : mic.rms > 0.02 ? 'sound detected · pitch uncertain' : 'listening…'}</small>}
             </div>
           </div>
+          <fieldset className="sax-key-toggle">
+            <legend>Saxophone key</legend>
+            {([['concert', 'Concert'], ['alto', 'Alto E♭'], ['tenor', 'Tenor B♭']] as const).map(([key, label]) => (
+              <button key={key} type="button" aria-pressed={saxKey === key} onClick={() => setSaxKey(key)}>{label}</button>
+            ))}
+            <small>{saxKey === 'concert' ? 'Chart and notes use concert pitch.' : `Circle selects concert ${saxConcertKey}; chart shows written ${saxWrittenKey(saxConcertRoot, saxKey)} for ${saxKey === 'alto' ? 'alto' : 'tenor'}. Transcription and analysis use concert pitch.`}</small>
+          </fieldset>
           <div className="record-controls">
             <button className="button button-secondary" onClick={midi.connect} disabled={!midi.supported || midi.connected}>Connect MIDI</button>
-            <button className="button button-primary" onClick={() => startMidiTake()} disabled={!midi.connected || transport.mode !== 'stopped' || mic.requesting}>Start MIDI take</button>
-            <button className="button button-primary" onClick={() => startPianoTake()} disabled={transport.mode !== 'stopped' || mic.requesting}>Start piano take</button>
-            <button className="button button-mic" onClick={() => void startMicTake()} disabled={!mic.supported || transport.mode !== 'stopped' || mic.requesting}>{mic.requesting ? 'Requesting mic…' : 'Start sax take'}</button>
+            <button className="button button-primary" onClick={() => startMidiTake()} disabled={!midi.connected || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>Start MIDI take</button>
+            <button className="button button-primary" onClick={() => startPianoTake()} disabled={transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>Start piano take</button>
+            <button className="button button-mic" onClick={() => void startMicTake()} disabled={!mic.supported || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>{mic.requesting ? 'Requesting mic…' : 'Start sax take'}</button>
             <button className="button button-stop" onClick={stopRecording} disabled={transport.mode !== 'recording'}>Stop take</button>
             <button className="button button-example" onClick={discardAndLoadExample}>Load example take</button>
           </div>
           <div className="transport-controls">
             <button onClick={() => void transport.start('playing')} disabled={transport.mode !== 'stopped'}>▶ &nbsp; Play loop</button>
             <button onClick={() => transport.mode === 'recording' ? stopRecording() : transport.mode === 'replaying' || transport.mode === 'paused' ? replayKindRef.current === 'full' ? stopFullReplay() : stopReplay() : transport.stop()} disabled={transport.mode === 'stopped'}>■ &nbsp; Stop</button>
-            <button onClick={clearTake} disabled={take.notes.length === 0 && take.pending.length === 0 && !mic.active}>Clear</button>
+            <button onClick={clearTake} disabled={take.notes.length === 0 && take.pending.length === 0 && !mic.active && !micAudio && !micAudioFinalizing}>Clear</button>
           </div>
           <div className="sound-toggles">
             <label><input type="checkbox" checked={transport.metronome} onChange={(event) => transport.setMetronome(event.target.checked)} /> Metronome</label>
@@ -454,7 +516,7 @@ export default function App() {
 
         <section className="panel progression-panel" aria-label="Chord progression">
           <div className="panel-heading progression-heading">
-            <div><p className="eyebrow">02 / THE CHANGES</p><h2>{progression.label}</h2></div>
+            <div><p className="eyebrow">02 / THE CHANGES{saxKey === 'concert' ? '' : ` · ${saxKey === 'alto' ? 'ALTO E♭' : 'TENOR B♭'} WRITTEN`}</p><h2>{writtenProgressionLabel}</h2></div>
             <span className="tempo-pill">4/4 &nbsp; · &nbsp; {BPM} BPM</span>
           </div>
           <div className="progression-canvas">
@@ -464,13 +526,13 @@ export default function App() {
               selectedForm={progression.form === 'turnaround' ? null : progression.form}
               onSelectKey={selectCircleKey}
               onSelectForm={selectCircleForm}
-              disabled={transport.mode !== 'stopped' || mic.requesting}
+              disabled={transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}
             />
             <div className={`chart ${progression.form === 'blues' ? 'chart--blues' : ''}`}>
               {progression.chords.map((bar, index) => (
                 <div key={index} className={`chart-bar ${progression.form === 'blues' ? 'chart-bar--compact' : ''} ${index === activeBar ? 'active' : ''}`}>
                   <span className="chart-bar-number">BAR {String(index + 1).padStart(2, '0')}</span>
-                  <strong>{bar.name}</strong>
+                  <strong>{saxWrittenChord(bar, saxKey)}</strong>
                   <span className="chart-bar-beat">{index === activeBar ? `BEAT ${Math.floor(loopBeat % BEATS_PER_BAR) + 1} / 4` : '4 BEATS'}</span>
                   <span className="chart-progress" style={{ width: index === activeBar ? `${((loopBeat % BEATS_PER_BAR) / BEATS_PER_BAR) * 100}%` : '0%' }} />
                 </div>
@@ -478,13 +540,13 @@ export default function App() {
             </div>
           </div>
           <div className="progression-meta">
-            <p>{progression.description}</p>
-            <button type="button" aria-pressed={progression.id === 'turnaround-c'} disabled={transport.mode !== 'stopped' || mic.requesting} onClick={() => switchProgression('turnaround-c')}>C turnaround preset</button>
+            <p>{progression.chords.map((bar) => saxWrittenChord(bar, saxKey)).join(' | ')}</p>
+            <button type="button" aria-pressed={progression.id === 'turnaround-c'} disabled={transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing} onClick={() => switchProgression('turnaround-c')}>C turnaround preset</button>
           </div>
           <div className="chord-context">
-            <div><span>NOW PLAYING</span><strong>{chord.name}</strong></div>
+            <div><span>NOW PLAYING</span><strong>{saxWrittenChord(chord, saxKey)}</strong></div>
             <span className="chord-arrow" aria-hidden="true">→</span>
-            <div><span>UP NEXT</span><strong>{nextChord.name}</strong></div>
+            <div><span>UP NEXT</span><strong>{saxWrittenChord(nextChord, saxKey)}</strong></div>
             <p>Guide tones and tensions update with each chord.</p>
           </div>
         </section>
@@ -504,16 +566,19 @@ export default function App() {
             <div><p className="eyebrow">03 / YOUR TAKE</p><h2>Piano roll</h2></div>
             <span className="note-count">{take.notes.length} {take.notes.length === 1 ? 'NOTE' : 'NOTES'}</span>
           </div>
-          <p className="take-summary">{transport.mode === 'recording' ? recordingInputRef.current === 'mic' ? 'Listening for a single-note sax phrase…' : recordingInputRef.current === 'piano' ? 'Recording on-screen piano notes…' : 'Recording MIDI notes…' : take.source === 'example' ? 'Example take loaded. Select a note on the roll to inspect its evidence.' : take.source === 'midi' ? 'MIDI take captured. Select a note on the roll to inspect its evidence.' : take.source === 'piano' ? 'Piano take captured. Select a note on the roll to inspect its evidence.' : take.source === 'mic' ? 'Sax phrase transcribed in concert pitch. Correct notes below, then select a note on the roll.' : 'Play the piano freely, start a take, or load the example.'}{take.pending.length ? ` ${take.pending.length} held.` : ''}</p>
+          <p className="take-summary">{transport.mode === 'recording' ? recordingInputRef.current === 'mic' ? 'Listening for a single-note sax phrase…' : recordingInputRef.current === 'piano' ? 'Recording on-screen piano notes…' : 'Recording MIDI notes…' : micAudioFinalizing ? 'Saving your microphone audio…' : take.source === 'example' ? 'Example take loaded. Select a note on the roll to inspect its evidence.' : take.source === 'midi' ? 'MIDI take captured. Select a note on the roll to inspect its evidence.' : take.source === 'piano' ? 'Piano take captured. Select a note on the roll to inspect its evidence.' : take.source === 'mic' ? 'Sax phrase transcribed in concert pitch. Replay uses your microphone audio when available; note edits affect the transcription only.' : 'Play the piano freely, start a take, or load the example.'}{take.pending.length ? ` ${take.pending.length} held.` : ''}</p>
           {practiceOf && <p className="practice-context"><strong>Practice target:</strong> {practiceOf.explanation} {transport.mode === 'recording' ? 'Play the passage, then stop the take to see fresh evidence.' : 'Your new take is shown below.'}</p>}
           <div className="take-replay" aria-label="Full take replay controls">
             <div className="take-replay-buttons">
-              <button type="button" onClick={startFullReplay} disabled={takeEnd <= 0 || transport.mode !== 'stopped'}>▶ Replay full take</button>
+              <button type="button" onClick={startFullReplay} disabled={takeEnd <= 0 || transport.mode !== 'stopped' || micAudioFinalizing}>▶ Replay full take</button>
               <button type="button" onClick={replayKind === 'full' && transport.mode === 'paused' ? () => void resumeFullReplay() : pauseFullReplay} disabled={replayKind !== 'full' || (transport.mode !== 'replaying' && transport.mode !== 'paused')}>{transport.mode === 'paused' && replayKind === 'full' ? '▶ Resume' : 'Ⅱ Pause'}</button>
               <button type="button" onClick={stopFullReplay} disabled={replayKind !== 'full' || (transport.mode !== 'replaying' && transport.mode !== 'paused')}>■ Stop replay</button>
               <label>Speed <select aria-label="Full take playback speed" value={fullReplayRate} onChange={(event) => changeFullReplayRate(Number(event.target.value))} disabled={transport.mode === 'recording' || transport.mode === 'playing' || replayKind === 'passage'}>
                 {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
               </select></label>
+              {take.source === 'mic' && micAudio && <label>Sound <select aria-label="Replay sound" value={replaySound} onChange={(event) => { if (transport.mode === 'replaying' || transport.mode === 'paused') stopReplay(); setReplaySound(event.target.value as 'original' | 'notes'); }}>
+                <option value="original">Original audio</option><option value="notes">Note preview</option>
+              </select></label>}
             </div>
             <div className="take-replay-position">
               <label htmlFor="take-replay-seek">Playhead</label>
@@ -568,10 +633,10 @@ export default function App() {
                         <p>{selectedPassage.explanation}</p>
                       </div>
                       <div className="selected-actions">
-                        <button onClick={replaySelected} disabled={transport.mode !== 'stopped'}>Replay at 60% speed</button>
-                        <button onClick={() => practiceSelected('piano')} disabled={transport.mode !== 'stopped' || mic.requesting}>Try with piano</button>
-                        <button onClick={() => practiceSelected('midi')} disabled={!midi.connected || transport.mode !== 'stopped'}>Try with MIDI</button>
-                        <button onClick={() => practiceSelected('mic')} disabled={!mic.supported || transport.mode !== 'stopped' || mic.requesting}>Try with mic</button>
+                        <button onClick={replaySelected} disabled={transport.mode !== 'stopped' || micAudioFinalizing}>Replay at 60% speed</button>
+                        <button onClick={() => practiceSelected('piano')} disabled={transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>Try with piano</button>
+                        <button onClick={() => practiceSelected('midi')} disabled={!midi.connected || transport.mode !== 'stopped' || micAudioFinalizing}>Try with MIDI</button>
+                        <button onClick={() => practiceSelected('mic')} disabled={!mic.supported || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>Try with mic</button>
                       </div>
                       {!midi.connected && <small>Use the on-screen piano, connect MIDI, or record with the sax microphone.</small>}
                     </>
