@@ -75,7 +75,16 @@ export function createCoachServer(options = {}) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  createCoachServer().listen(port, host, () => {
+  const server = createCoachServer();
+  server.on("error", (error) => {
+    if (error.code === "EADDRINUSE") {
+      console.error(`Coach API port ${port} is already in use. Stop the existing dev server before restarting.`);
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  });
+  server.listen(port, host, () => {
     console.log(`Changes Coach server listening on http://${host}:${port}`);
   });
 }

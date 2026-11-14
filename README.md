@@ -9,14 +9,14 @@ npm install
 npm run dev
 ```
 
-`npm run dev` starts the Vite app and the local `/api/coach` server. The app still works without a Gemini key; requesting a practice plan uses its local fallback. To enable Gemini coaching, set a server environment variable before starting the app:
+`npm run dev` starts the Vite app and the local `/api/coach` server. The app still works without a Gemini key; requesting a practice plan uses its local fallback. To enable Gemini coaching, copy `.env.example` to `.env`, replace the placeholder key, and restart `npm run dev`. The local Node server reads `.env` on startup. You can also set a server environment variable before starting the app:
 
 ```bash
 export GEMINI_API_KEY='your-key-from-Google-AI-Studio'
 npm run dev
 ```
 
-Create the key in [Google AI Studio](https://aistudio.google.com/app/apikey). The optional `GEMINI_MODEL` defaults to `gemini-3.8-flash`. Keep the key out of `VITE_` variables, client code, and commits. `.env.example` lists the server variables; the run scripts read exported environment variables, so an `.env` file is not loaded automatically.
+Create the key in [Google AI Studio](https://aistudio.google.com/app/apikey). The optional `GEMINI_MODEL` defaults to `gemini-3.8-flash`. Keep the key out of `VITE_` variables, client code, and commits. `.env` is ignored by Git; `.env.example` is only a template. Exported environment variables take precedence over `.env` values.
 
 Open the local URL printed by Vite in Chrome or Edge. Click a circle key and choose **ii–V–I** or **12-bar blues** while the transport is stopped. Takes are kept separately for each key and form during the current session; switching back restores that chart's take. Web MIDI requires a supported browser and a secure context; `localhost` works. With a keyboard plugged in, click **Connect MIDI**, then **Start MIDI take** and **Stop take**. You can also click **Load example take** to see analysis without hardware; the example follows the selected key and form. The piano roll scrolls along with longer charts.
 
