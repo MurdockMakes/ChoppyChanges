@@ -2,11 +2,21 @@
 .keyboard-card-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
 .keyboard-card-head h2 { margin: 3px 0 0; font-size: clamp(21px, 2vw, 29px); letter-spacing: -.04em; }
 .keyboard-card-head h2 span { color: var(--green, #b1fa79); }
+.computer-keys-control { display: flex; flex-wrap: wrap; align-items: center; gap: 9px 13px; margin: 0 0 13px; }
+.computer-keys-toggle { border: 1px solid #61766e; border-radius: 7px; padding: 8px 12px; color: #edf2ed; background: #25332e; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; }
+.computer-keys-toggle:hover { border-color: #b1fa79; }
+.computer-keys-toggle.is-active { border-color: #b1fa79; color: #102118; background: #b1fa79; box-shadow: 0 0 0 3px #b1fa7933; }
+.computer-keys-toggle:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+.computer-keys-status { color: var(--muted, #9caeaa); font-size: 11px; font-weight: 650; }
+.computer-active .computer-keys-status { color: #b1fa79; }
 .next-hint { max-width: 300px; text-align: right; color: var(--muted, #9caeaa); font-size: 13px; line-height: 1.5; }
 .next-hint strong { color: var(--text, #edf2ed); }
 .keyboard-scroll { width: 100%; overflow-x: auto; padding: 5px 2px 2px; }
 .piano-keys { position: relative; min-width: 655px; height: 146px; border-radius: 9px; overflow: hidden; background: #07100f; }
+.computer-active .piano-keys { box-shadow: 0 0 0 2px #b1fa79; }
 .piano-key { position: absolute; top: 0; display: flex; flex-direction: column; align-items: center; justify-content: end; gap: 1px; padding: 0 1px 9px; text-align: center; line-height: 1.1; font: inherit; cursor: pointer; user-select: none; touch-action: none; -webkit-tap-highlight-color: transparent; transition: background-color .12s, box-shadow .12s; }
+.piano-key-binding { position: absolute; top: 8px; left: 50%; display: grid; place-items: center; min-width: 20px; height: 20px; padding: 0 3px; transform: translateX(-50%); border-radius: 4px; color: #e9f9e6; background: #203932; font-size: 11px; font-weight: 850; line-height: 1; }
+.piano-key.black .piano-key-binding { top: 7px; min-width: 17px; height: 18px; color: #102118; background: #c5e2be; font-size: 10px; }
 .piano-key.white { height: 146px; color: #14231f; background: #e8eee7; border: 1px solid #879991; border-top: 0; border-radius: 0 0 5px 5px; z-index: 1; }
 .piano-key.black { height: 94px; color: #eaf1e9; background: #1f2c2b; border: 1px solid #0c1818; border-radius: 0 0 5px 5px; z-index: 3; box-shadow: 0 5px 5px #07100f80; }
 .piano-key.white.root { background: #8bd4ed; }
