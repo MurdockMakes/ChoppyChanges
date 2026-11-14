@@ -1,0 +1,21 @@
+.transcription-editor { margin-top: 14px; padding: 14px; border: 1px solid #476360; border-radius: 12px; background: #102126; }
+.transcription-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.transcription-editor-head h3 { margin: 4px 0 0; color: var(--text, #f3f3e9); font-size: 17px; letter-spacing: -.02em; }
+.transcription-editor-head > button { flex: 0 0 auto; min-height: 31px; padding: 5px 10px; border: 1px solid #7da77c; border-radius: 8px; color: #e7f5d7; background: #2b5138; font-size: 11px; font-weight: 750; }
+.transcription-editor-head > button:hover { background: #396747; }
+.transcription-editor-help { margin: 9px 0 11px; color: var(--muted, #9eb5b4); font-size: 11px; line-height: 1.45; }
+.transcription-editor-empty { margin: 0; padding: 13px; border: 1px dashed #45615f; border-radius: 8px; color: #b8ccc4; font-size: 12px; }
+.transcription-editor-scroll { max-height: 242px; overflow: auto; border: 1px solid #354e50; border-radius: 9px; scrollbar-color: #567a70 #1a2b2c; }
+.transcription-editor table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 11px; }
+.transcription-editor th { position: sticky; top: 0; z-index: 1; padding: 8px; color: #a7c0b8; background: #21383a; font-size: 9px; font-weight: 800; letter-spacing: .09em; text-align: left; text-transform: uppercase; }
+.transcription-editor td { padding: 6px 7px; border-top: 1px solid #30484a; color: #e6efe6; }
+.transcription-editor tr:nth-child(even) td { background: #172b2f; }
+.transcription-index { color: #8baaa4 !important; font-weight: 750; }
+.transcription-position { white-space: nowrap; font-weight: 650; }
+.transcription-position small { display: block; margin-top: 2px; color: #91b4a3; font-size: 9px; }
+.transcription-editor select, .transcription-editor input { width: 100%; min-height: 29px; padding: 4px 6px; border: 1px solid #52706f; border-radius: 6px; color: #f3f6e9; background: #183237; font-size: 11px; }
+.transcription-editor input { width: 78px; }
+.transcription-editor select { min-width: 84px; }
+.transcription-delete { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid #755957; border-radius: 6px; color: #f3c8bd; background: #432e2e; font-size: 18px; line-height: 1; }
+.transcription-delete:hover { background: #623a38; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }

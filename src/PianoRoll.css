@@ -1,0 +1,42 @@
+.piano-roll-scroll {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border: 1px solid #304149;
+  border-radius: 14px;
+  background: #152229;
+  scrollbar-color: #586e73 #1b2a30;
+}
+
+.piano-roll { display: block; font-family: inherit; }
+.roll-surface { fill: #152229; }
+.roll-bar-head { fill: #20323a; }
+.roll-bar-head--1 { fill: #233239; }
+.roll-bar-head--2, .roll-bar-head--3 { fill: #1e3035; }
+.roll-bar-number { fill: #9bb8b3; font-size: 10px; font-weight: 700; letter-spacing: 1.6px; }
+.roll-bar-chord { fill: #f4f2e9; font-size: 17px; font-weight: 750; }
+.roll-row { fill: #1b2b32; }
+.roll-row--black { fill: #17252b; }
+.roll-pitch-label { fill: #aec5c1; font-size: 10px; font-weight: 650; }
+.roll-grid { stroke: #34464c; stroke-width: .7; }
+.roll-grid--bar { stroke: #5c777a; stroke-width: 1.35; }
+.roll-beat-label { fill: #8eaaa7; font-size: 10px; }
+.roll-selected-band { fill: #d7af61; opacity: .13; }
+.roll-note { stroke: #0e2026; stroke-width: 1; }
+.roll-note--root { fill: #69bced; }
+.roll-note--guide { fill: #70e5a9; }
+.roll-note--fifth { fill: #a1d9b5; }
+.roll-note--tension { fill: #efbd63; }
+.roll-note--other { fill: #aeb9bc; }
+.roll-note--pending { stroke: #faf4da; stroke-width: 1.5; stroke-dasharray: 3 2; }
+.roll-note-group--selected .roll-note { stroke: #fff2bf; stroke-width: 2; }
+.roll-note-label { fill: #14252a; font-size: 9px; font-weight: 800; pointer-events: none; }
+.roll-resolution { cursor: pointer; outline: none; }
+.roll-resolution-hit { fill: none; stroke: transparent; stroke-width: 16; }
+.roll-resolution-path { fill: none; stroke: #f4cc73; stroke-width: 2.3; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+.roll-resolution--guide-tone .roll-resolution-path { stroke: #a4f1c3; }
+.roll-resolution--chromatic .roll-resolution-path { stroke: #8fd3f0; }
+.roll-resolution--selected .roll-resolution-path,
+.roll-resolution:focus-visible .roll-resolution-path { stroke: #fff5c1; stroke-width: 3.5; }
+.roll-playhead { stroke: #ffdd83; stroke-width: 1.5; pointer-events: none; }
+.roll-playhead-dot { fill: #ffdd83; pointer-events: none; }
