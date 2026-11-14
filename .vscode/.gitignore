@@ -1,0 +1,22 @@
+# GitShift personal account configuration
+github-accounts.json
+# Dependencies and build output
+node_modules/
+dist/
+.vite/
+coverage/
+*.tsbuildinfo
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Deployment tooling
+.vercel/
+.netlify/
+
+# Local files
+.DS_Store
+*.log
+local-recordings/
