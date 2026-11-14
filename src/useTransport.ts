@@ -2,18 +2,30 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AudioEngine } from './audio';
 import { BEATS_PER_BAR, BPM, chordAtBeat, DEFAULT_PROGRESSION, type Progression } from './theory';
 
-export type TransportMode = 'stopped' | 'playing' | 'recording' | 'replaying' | 'paused';
+export type TransportMode = 'stopped' | 'counting-in' | 'playing' | 'recording' | 'replaying' | 'paused';
+type RunningMode = 'playing' | 'recording' | 'replaying';
 const MS_PER_BEAT = 60_000 / BPM;
 
-export function useTransport(onAdvance?: (previousBeat: number, beat: number, mode: TransportMode, audio: AudioEngine) => void, progression: Progression = DEFAULT_PROGRESSION) {
+export function useTransport(
+  onAdvance?: (previousBeat: number, beat: number, mode: TransportMode, audio: AudioEngine) => void,
+  progression: Progression = DEFAULT_PROGRESSION,
+  onCountInEnd?: (mode: RunningMode, beat: number) => void,
+  onLimit?: (mode: RunningMode, beat: number) => void,
+) {
   const [mode, setMode] = useState<TransportMode>('stopped');
   const [beat, setBeat] = useState(0);
+  const [countInRemaining, setCountInRemaining] = useState(0);
   const [metronome, setMetronome] = useState(true);
   const [chordCues, setChordCues] = useState(true);
   const [clockVersion, setClockVersion] = useState(0);
   const engineRef = useRef(new AudioEngine());
   const advanceRef = useRef(onAdvance);
+  const countInEndCallbackRef = useRef(onCountInEnd);
+  const limitCallbackRef = useRef(onLimit);
   const modeRef = useRef<TransportMode>('stopped');
+  const targetModeRef = useRef<RunningMode>('playing');
+  const countInEndBeatRef = useRef(0);
+  const countInBeatsRef = useRef(0);
   const originRef = useRef(0);
   const rateRef = useRef(1);
   const clockVersionRef = useRef(0);
@@ -23,13 +35,16 @@ export function useTransport(onAdvance?: (previousBeat: number, beat: number, mo
   const cuesRef = useRef(true);
   const progressionRef = useRef(progression);
   advanceRef.current = onAdvance;
+  countInEndCallbackRef.current = onCountInEnd;
+  limitCallbackRef.current = onLimit;
   metronomeRef.current = metronome;
   cuesRef.current = chordCues;
   progressionRef.current = progression;
 
   const getBeat = useCallback(() => {
     if (modeRef.current === 'stopped' || modeRef.current === 'paused') return beatRef.current;
-    return Math.max(0, ((performance.now() - originRef.current) / MS_PER_BEAT) * rateRef.current);
+    const liveBeat = ((performance.now() - originRef.current) / MS_PER_BEAT) * rateRef.current;
+    return modeRef.current === 'counting-in' ? liveBeat : Math.max(0, liveBeat);
   }, []);
 
   const restartClock = useCallback(() => {
@@ -38,9 +53,10 @@ export function useTransport(onAdvance?: (previousBeat: number, beat: number, mo
   }, []);
 
   const stop = useCallback((atBeat?: number) => {
-    beatRef.current = atBeat ?? getBeat();
+    beatRef.current = modeRef.current === 'counting-in' ? countInEndBeatRef.current : atBeat ?? getBeat();
     modeRef.current = 'stopped';
     untilRef.current = null;
+    setCountInRemaining(0);
     restartClock();
     setBeat(beatRef.current);
     setMode('stopped');
@@ -92,17 +108,22 @@ export function useTransport(onAdvance?: (previousBeat: number, beat: number, mo
     }
   }, [getBeat, restartClock]);
 
-  const start = useCallback(async (nextMode: Exclude<TransportMode, 'stopped'>, fromBeat = 0, rate = 1, untilBeat: number | null = null) => {
+  const start = useCallback(async (nextMode: RunningMode, fromBeat = 0, rate = 1, untilBeat: number | null = null, countInBeats = 0) => {
     engineRef.current.stopTimed();
     const audioReady = engineRef.current.resume();
     rateRef.current = rate;
-    originRef.current = performance.now() - (fromBeat * MS_PER_BEAT) / rate;
-    beatRef.current = fromBeat;
+    const lead = Math.max(0, Math.floor(countInBeats));
+    originRef.current = performance.now() - ((fromBeat - lead) * MS_PER_BEAT) / rate;
+    beatRef.current = fromBeat - lead;
+    countInEndBeatRef.current = fromBeat;
+    countInBeatsRef.current = lead;
+    targetModeRef.current = nextMode;
     untilRef.current = untilBeat;
-    modeRef.current = nextMode;
+    modeRef.current = lead > 0 ? 'counting-in' : nextMode;
     restartClock();
     setBeat(fromBeat);
-    setMode(nextMode);
+    setCountInRemaining(lead);
+    setMode(modeRef.current);
     await audioReady;
   }, [restartClock]);
 
@@ -115,11 +136,32 @@ export function useTransport(onAdvance?: (previousBeat: number, beat: number, mo
     const tick = () => {
       if (modeRef.current !== mode || version !== clockVersionRef.current) return;
       const nowBeat = getBeat();
+      if (mode === 'counting-in') {
+        const startBeat = countInEndBeatRef.current;
+        for (; nextPulse < startBeat && nextPulse <= nowBeat; nextPulse += 1) {
+          engineRef.current.click(nextPulse === startBeat - countInBeatsRef.current);
+        }
+        if (nowBeat >= startBeat) {
+          const targetMode = targetModeRef.current;
+          beatRef.current = startBeat;
+          modeRef.current = targetMode;
+          restartClock();
+          setBeat(startBeat);
+          setCountInRemaining(0);
+          setMode(targetMode);
+          countInEndCallbackRef.current?.(targetMode, startBeat);
+          return;
+        }
+        setCountInRemaining(Math.ceil(startBeat - nowBeat));
+        frame = requestAnimationFrame(tick);
+        return;
+      }
       const until = untilRef.current;
       if (until !== null && nowBeat >= until) {
         advanceRef.current?.(previousBeat, until, mode, engineRef.current);
         beatRef.current = until;
         stop(until);
+        limitCallbackRef.current?.(mode as RunningMode, until);
         return;
       }
       for (; nextPulse <= Math.floor(nowBeat); nextPulse += 1) {
@@ -143,7 +185,7 @@ export function useTransport(onAdvance?: (previousBeat: number, beat: number, mo
   }, []);
 
   return {
-    mode, modeRef, beat, beatRef, getBeat, start, stop, seek, pauseReplay, resumeReplay, changeReplayRate,
+    mode, modeRef, beat, beatRef, countInRemaining, getBeat, start, stop, seek, pauseReplay, resumeReplay, changeReplayRate,
     metronome, setMetronome, chordCues, setChordCues,
     playNote: (pitch: number, seconds: number) => engineRef.current.playNote(pitch, seconds),
     prepareAudio: () => engineRef.current.resume(),

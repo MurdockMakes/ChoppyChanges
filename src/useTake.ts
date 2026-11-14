@@ -32,13 +32,13 @@ export function useTake(transport: Transport) {
     setPending(captureRef.current.pending());
   }, [addCompleted, transport]);
 
-  const startTake = useCallback(async (fromBeat = 0, rate = 1, input: 'midi' | 'mic' | 'piano' = 'midi') => {
+  const startTake = useCallback(async (fromBeat = 0, rate = 1, input: 'midi' | 'mic' | 'piano' = 'midi', untilBeat: number | null = null, countInBeats = 0) => {
     captureRef.current.reset();
     setNotes([]);
     setPending([]);
     sourceRef.current = input;
     setSource(input);
-    await transport.start('recording', fromBeat, rate);
+    await transport.start('recording', fromBeat, rate, untilBeat, countInBeats);
   }, [transport]);
 
   const appendNotes = useCallback((incoming: NoteEvent[]) => {

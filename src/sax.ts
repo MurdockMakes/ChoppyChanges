@@ -1,4 +1,4 @@
-import { CIRCLE_KEYS, spellNoteWithOctave, type ChordInfo } from './theory.ts';
+import { CIRCLE_KEYS, spellDegree, spellNoteWithOctave, type ChordInfo } from './theory.ts';
 
 export type SaxKey = 'concert' | 'alto' | 'tenor';
 
@@ -18,6 +18,23 @@ export function saxWrittenChord(chord: ChordInfo, key: SaxKey): string {
   if (key === 'concert') return chord.name;
   const suffix = chord.quality === 'minor7' ? 'm7' : chord.quality === 'major7' ? 'maj7' : '7';
   return `${saxWrittenKey(chord.root, key)}${suffix}`;
+}
+
+export function saxChordReference(chord: ChordInfo, key: SaxKey): { role: string; note: string }[] {
+  const root = saxWrittenKey(chord.root, key);
+  const third = chord.quality === 'minor7' ? 3 : 4;
+  const seventh = chord.quality === 'major7' ? 11 : 10;
+  const tones = [
+    { role: 'Root', note: root },
+    { role: '3rd', note: spellDegree(root, third, 2) },
+    { role: '5th', note: spellDegree(root, 7, 4) },
+    { role: '7th', note: spellDegree(root, seventh, 6) },
+  ];
+  const tensions = chord.tensions.map(({ pitchClass, label }) => ({
+    role: label,
+    note: spellDegree(root, (pitchClass - chord.root + 12) % 12, label.includes('9') ? 1 : label.includes('11') ? 3 : 5),
+  }));
+  return [...tones, ...tensions];
 }
 
 /** Smooth one-frame pitch errors before they reach note segmentation. */
