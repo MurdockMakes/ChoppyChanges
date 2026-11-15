@@ -46,7 +46,7 @@ export default function App() {
   const [replayError, setReplayError] = useState('');
   const [transportError, setTransportError] = useState('');
   const [micAudioWarning, setMicAudioWarning] = useState('');
-  const [rollExpanded, setRollExpanded] = useState(true);
+  const [bankExpanded, setBankExpanded] = useState(false);
   const [saxKey, setSaxKey] = useState<SaxKey>('concert');
   const [passCount, setPassCount] = useState('1');
   const [runStartBeat, setRunStartBeat] = useState(0);
@@ -65,7 +65,7 @@ export default function App() {
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const importButtonRef = useRef<HTMLButtonElement | null>(null);
   const takeBankRef = useRef<HTMLElement | null>(null);
-  const replayRollToggleRef = useRef<HTMLButtonElement | null>(null);
+  const pianoRollHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const replayButtonRef = useRef<HTMLButtonElement | null>(null);
   const pauseButtonRef = useRef<HTMLButtonElement | null>(null);
   const stopReplayButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -590,17 +590,6 @@ export default function App() {
     });
   }
 
-  function togglePianoRoll(fromTakeHeading = false) {
-    const nextExpanded = !rollExpanded;
-    setRollExpanded(nextExpanded);
-    if (fromTakeHeading && !nextExpanded && (transport.mode === 'replaying' || transport.mode === 'paused')) {
-      requestAnimationFrame(() => {
-        document.getElementById('playback-workspace')?.scrollIntoView({ behavior: 'auto', block: 'start' });
-        replayRollToggleRef.current?.focus({ preventScroll: true });
-      });
-    }
-  }
-
   function selectNote(id: string) {
     const note = take.notes.find((item) => item.id === id);
     if (!note) return;
@@ -716,7 +705,7 @@ export default function App() {
     setReplaySound(snapshot.replaySound);
     take.restoreTake(snapshot.notes, snapshot.source);
     transport.seek(snapshot.beat);
-    if (fromCompactStop) requestAnimationFrame(() => replayRollToggleRef.current?.focus({ preventScroll: true }));
+    if (fromCompactStop) requestAnimationFrame(() => pianoRollHeadingRef.current?.focus());
     else if (fromSetupStop) requestAnimationFrame(() => focusRecordingStart(stoppedInput));
   }
 
@@ -738,7 +727,7 @@ export default function App() {
     }
     recordingInputRef.current = null;
     take.stopTake(atBeat);
-    if (fromCompactStop) requestAnimationFrame(() => replayRollToggleRef.current?.focus({ preventScroll: true }));
+    if (fromCompactStop) requestAnimationFrame(() => pianoRollHeadingRef.current?.focus());
     else if (fromSetupStop) requestAnimationFrame(() => focusRecordingStart(stoppedInput));
   }
 
@@ -942,64 +931,69 @@ export default function App() {
             <span role="status" aria-live="polite">{transport.mode === 'counting-in' ? `Count in ${transport.countInRemaining}; get ready to play.` : `Recording ${recordingInputRef.current === 'mic' ? 'sax' : recordingInputRef.current === 'piano' ? 'piano' : 'MIDI'} take · pass ${passAtBeat(progression, runStartBeat, transport.beat, runPasses)} of ${runPasses}`}</span>
             <button ref={performanceStopButtonRef} type="button" onClick={() => stopRecording()}>Stop take</button>
           </div>}
-
-        <section className="panel take-replay replay-dock" aria-label="Full take replay controls">
-          {replayError && <p className="take-replay-error" role="alert">{replayError}</p>}
-          <div className="take-replay-buttons">
-            <button ref={replayButtonRef} type="button" onClick={startFullReplay} disabled={takeEnd <= 0 || transport.mode !== 'stopped' || micAudioFinalizing || bankBusy}>▶ Replay full take</button>
-            <button ref={pauseButtonRef} type="button" onClick={replayKind === 'full' && transport.mode === 'paused' ? () => void resumeFullReplay() : pauseFullReplay} disabled={replayKind !== 'full' || (transport.mode !== 'replaying' && transport.mode !== 'paused')}>{transport.mode === 'paused' && replayKind === 'full' ? '▶ Resume' : 'Ⅱ Pause'}</button>
-            <button ref={stopReplayButtonRef} type="button" onClick={replayKind === 'full' ? stopFullReplay : () => stopReplay()} disabled={!replayKind || (transport.mode !== 'replaying' && transport.mode !== 'paused')}>■ Stop replay</button>
-            <button ref={replayRollToggleRef} type="button" className="roll-toggle" aria-expanded={rollExpanded} aria-controls="piano-roll-region" onClick={() => togglePianoRoll()}>{rollExpanded ? 'Collapse piano roll' : 'Expand piano roll'}</button>
-            <label>Speed <select aria-label="Full take playback speed" value={fullReplayRate} onChange={(event) => changeFullReplayRate(Number(event.target.value))} disabled={transport.mode === 'recording' || transport.mode === 'playing' || replayKind === 'passage'}>
-              {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
-            </select></label>
-            {take.source === 'mic' && micAudio && <label>Sound <select aria-label="Replay sound" value={replaySound} onChange={(event) => { if (transport.mode === 'replaying' || transport.mode === 'paused') stopReplay(); setReplaySound(event.target.value as 'original' | 'notes'); }}>
-              <option value="original">Original audio</option><option value="notes">Note preview</option>
-            </select></label>}
-          </div>
-          <div className="take-replay-position">
-            <label htmlFor="take-replay-seek">Playhead</label>
-            <input id="take-replay-seek" aria-label="Seek full take" type="range" min="0" max={takeEnd || 1} step="0.01" value={Math.min(transport.beat, takeEnd || 1)} onChange={(event) => seekFullReplay(Number(event.target.value))} disabled={takeEnd <= 0 || transport.mode === 'recording' || transport.mode === 'playing' || replayKind === 'passage'} />
-            <output htmlFor="take-replay-seek">{formatPosition(Math.min(transport.beat, takeEnd))} · {Math.min(transport.beat, takeEnd).toFixed(2)} / {takeEnd.toFixed(2)} beats</output>
-          </div>
-        </section>
       </div>
 
       <div className="results-grid">
         <section className="panel take-panel" aria-label="Recorded take">
           <div className="panel-heading take-heading">
-            <div><p className="eyebrow">03 / YOUR TAKE</p><h2>Piano roll</h2></div>
+            <div><p className="eyebrow">03 / YOUR TAKE</p><h2 ref={pianoRollHeadingRef} tabIndex={-1}>Piano roll</h2></div>
             <div className="take-heading-actions">
               <span className="note-count">{take.notes.length} {take.notes.length === 1 ? 'NOTE' : 'NOTES'}</span>
-              <button type="button" className="roll-toggle" aria-expanded={rollExpanded} aria-controls="piano-roll-region" onClick={() => togglePianoRoll(true)}>{rollExpanded ? 'Collapse piano roll' : 'Expand piano roll'}</button>
             </div>
           </div>
           <p className="take-summary">{transport.mode === 'recording' ? recordingInputRef.current === 'mic' ? 'Listening for a single-note sax phrase…' : recordingInputRef.current === 'piano' ? 'Recording on-screen piano notes…' : 'Recording MIDI notes…' : micAudioFinalizing ? 'Saving your microphone audio…' : take.source === 'example' ? 'Example take loaded.' : take.source === 'midi' ? 'MIDI take captured.' : take.source === 'piano' ? 'Piano take captured.' : take.source === 'mic' ? 'Sax phrase transcribed in concert pitch. Replay uses your microphone audio when available; note edits affect the transcription only.' : 'Play the piano freely, start a take, or load the example.'}{take.pending.length ? ` ${take.pending.length} held.` : ''}</p>
           {micAudioWarning && <p className="mic-audio-warning" role="alert">{micAudioWarning}</p>}
           {practiceOf && <p className="practice-context"><strong>Practice target:</strong> {practiceOf.explanation} {transport.mode === 'recording' ? 'Play the passage, then stop the take to see fresh evidence.' : 'Your new take is shown below.'}</p>}
           <section className="take-bank" aria-label="Take bank" ref={takeBankRef} tabIndex={-1}>
-            <div className="take-bank-heading"><div><strong>Take bank</strong><small>Saved in this browser for this site</small></div><span>{bankedTakes.length} saved</span></div>
-            <div className="take-bank-save">
-              <input aria-label="Name this take" type="text" maxLength={80} placeholder="Name this take (optional)" value={bankName} onChange={(event) => setBankName(event.target.value)} disabled={bankBusy || !bankAvailable} />
-              <button type="button" onClick={() => void saveCurrentToBank()} disabled={!bankAvailable || bankLoading || bankBusy || transport.mode !== 'stopped' || micAudioFinalizing || !take.source || take.notes.length === 0 && !micAudio}>Save current take</button>
+            <div className="take-bank-heading">
+              <div><strong>Take bank</strong><small>Saved in this browser for this site</small></div>
+              <div className="take-bank-heading-actions">
+                <span>{bankedTakes.length} saved</span>
+                <button type="button" className="take-bank-toggle" aria-expanded={bankExpanded} aria-controls="take-bank-content" onClick={() => setBankExpanded((expanded) => !expanded)}>{bankExpanded ? 'Collapse Take bank' : 'Expand Take bank'}</button>
+              </div>
             </div>
-            <div className="take-bank-transfer" aria-label="Import and export take files">
-              <button type="button" onClick={() => void exportFromBank()} disabled={!bankAvailable || bankLoading || bankBusy || transport.mode !== 'stopped' || micAudioFinalizing || bankedTakes.length === 0}>Export all takes</button>
-              <button type="button" ref={importButtonRef} onClick={() => importInputRef.current?.click()} disabled={!bankAvailable || bankLoading || bankBusy || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>Import take file</button>
-              <input ref={importInputRef} type="file" accept=".json,.resolve-labs-takes.json,.changes-takes.json,application/json" hidden aria-label="Choose a Resolve Labs take file" onChange={(event) => { void importIntoBank(event.currentTarget.files?.[0]).finally(() => importButtonRef.current?.focus()); }} />
+            <div id="take-bank-content" hidden={!bankExpanded}>
+              <div className="take-bank-save">
+                <input aria-label="Name this take" type="text" maxLength={80} placeholder="Name this take (optional)" value={bankName} onChange={(event) => setBankName(event.target.value)} disabled={bankBusy || !bankAvailable} />
+                <button type="button" onClick={() => void saveCurrentToBank()} disabled={!bankAvailable || bankLoading || bankBusy || transport.mode !== 'stopped' || micAudioFinalizing || !take.source || take.notes.length === 0 && !micAudio}>Save current take</button>
+              </div>
+              <div className="take-bank-transfer" aria-label="Import and export take files">
+                <button type="button" onClick={() => void exportFromBank()} disabled={!bankAvailable || bankLoading || bankBusy || transport.mode !== 'stopped' || micAudioFinalizing || bankedTakes.length === 0}>Export all takes</button>
+                <button type="button" ref={importButtonRef} onClick={() => importInputRef.current?.click()} disabled={!bankAvailable || bankLoading || bankBusy || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>Import take file</button>
+                <input ref={importInputRef} type="file" accept=".json,.resolve-labs-takes.json,.changes-takes.json,application/json" hidden aria-label="Choose a Resolve Labs take file" onChange={(event) => { void importIntoBank(event.currentTarget.files?.[0]).finally(() => importButtonRef.current?.focus()); }} />
+              </div>
+              <p className="take-bank-hint">Take files include edited notes and available microphone audio. Import and export stay on this device.</p>
+              {bankStatus && <p className={`take-bank-status${bankError ? ' take-bank-status-error' : ''}`} role={bankError ? 'alert' : 'status'}>{bankStatus}</p>}
+              {bankLoading ? <p className="take-bank-empty">Loading saved takes…</p> : bankedTakes.length === 0 ? <p className="take-bank-empty">Record a sax phrase, then save it here for quick replay later.</p> : <ul className="take-bank-list">
+                {bankedTakes.map((item) => <li key={item.id}>
+                  <div><strong>{item.name}</strong><small>{PROGRESSIONS.find((entry) => entry.id === item.progressionId)?.label ?? item.progressionId} · {item.source === 'mic' ? 'Sax' : item.source} · {item.noteCount} notes{item.hasAudio ? ' · original audio' : ''}</small></div>
+                  <button type="button" onClick={() => void loadFromBank(item.id)} disabled={bankBusy || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>Load</button>
+                  <button type="button" aria-label={`Export ${item.name}`} onClick={() => void exportFromBank(item)} disabled={bankBusy || bankLoading || !bankAvailable || transport.mode !== 'stopped' || micAudioFinalizing}>Export</button>
+                  <button type="button" className="take-bank-delete" aria-label={`Delete ${item.name}`} onClick={() => void removeFromBank(item)} disabled={bankBusy}>Delete</button>
+                </li>)}
+              </ul>}
             </div>
-            <p className="take-bank-hint">Take files include edited notes and available microphone audio. Import and export stay on this device.</p>
-            {bankStatus && <p className={`take-bank-status${bankError ? ' take-bank-status-error' : ''}`} role={bankError ? 'alert' : 'status'}>{bankStatus}</p>}
-            {bankLoading ? <p className="take-bank-empty">Loading saved takes…</p> : bankedTakes.length === 0 ? <p className="take-bank-empty">Record a sax phrase, then save it here for quick replay later.</p> : <ul className="take-bank-list">
-              {bankedTakes.map((item) => <li key={item.id}>
-                <div><strong>{item.name}</strong><small>{PROGRESSIONS.find((entry) => entry.id === item.progressionId)?.label ?? item.progressionId} · {item.source === 'mic' ? 'Sax' : item.source} · {item.noteCount} notes{item.hasAudio ? ' · original audio' : ''}</small></div>
-                <button type="button" onClick={() => void loadFromBank(item.id)} disabled={bankBusy || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>Load</button>
-                <button type="button" aria-label={`Export ${item.name}`} onClick={() => void exportFromBank(item)} disabled={bankBusy || bankLoading || !bankAvailable || transport.mode !== 'stopped' || micAudioFinalizing}>Export</button>
-                <button type="button" className="take-bank-delete" aria-label={`Delete ${item.name}`} onClick={() => void removeFromBank(item)} disabled={bankBusy}>Delete</button>
-              </li>)}
-            </ul>}
           </section>
-          <div id="piano-roll-region" hidden={!rollExpanded}>
+          <section className="take-replay" aria-label="Full take replay controls">
+            {replayError && <p className="take-replay-error" role="alert">{replayError}</p>}
+            <div className="take-replay-buttons">
+              <button ref={replayButtonRef} type="button" onClick={startFullReplay} disabled={takeEnd <= 0 || transport.mode !== 'stopped' || micAudioFinalizing || bankBusy}>▶ Replay full take</button>
+              <button ref={pauseButtonRef} type="button" onClick={replayKind === 'full' && transport.mode === 'paused' ? () => void resumeFullReplay() : pauseFullReplay} disabled={replayKind !== 'full' || (transport.mode !== 'replaying' && transport.mode !== 'paused')}>{transport.mode === 'paused' && replayKind === 'full' ? '▶ Resume' : 'Ⅱ Pause'}</button>
+              <button ref={stopReplayButtonRef} type="button" onClick={replayKind === 'full' ? stopFullReplay : () => stopReplay()} disabled={!replayKind || (transport.mode !== 'replaying' && transport.mode !== 'paused')}>■ Stop replay</button>
+              <label>Speed <select aria-label="Full take playback speed" value={fullReplayRate} onChange={(event) => changeFullReplayRate(Number(event.target.value))} disabled={transport.mode === 'recording' || transport.mode === 'playing' || replayKind === 'passage'}>
+                {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
+              </select></label>
+              {take.source === 'mic' && micAudio && <label>Sound <select aria-label="Replay sound" value={replaySound} onChange={(event) => { if (transport.mode === 'replaying' || transport.mode === 'paused') stopReplay(); setReplaySound(event.target.value as 'original' | 'notes'); }}>
+                <option value="original">Original audio</option><option value="notes">Note preview</option>
+              </select></label>}
+            </div>
+            <div className="take-replay-position">
+              <label htmlFor="take-replay-seek">Playhead</label>
+              <input id="take-replay-seek" aria-label="Seek full take" type="range" min="0" max={takeEnd || 1} step="0.01" value={Math.min(transport.beat, takeEnd || 1)} onChange={(event) => seekFullReplay(Number(event.target.value))} disabled={takeEnd <= 0 || transport.mode === 'recording' || transport.mode === 'playing' || replayKind === 'passage'} />
+              <output htmlFor="take-replay-seek">{formatPosition(Math.min(transport.beat, takeEnd))} · {Math.min(transport.beat, takeEnd).toFixed(2)} / {takeEnd.toFixed(2)} beats</output>
+            </div>
+          </section>
+          <div id="piano-roll-region">
             <PianoRoll
               notes={take.notes}
               pending={take.pending}
@@ -1012,7 +1006,6 @@ export default function App() {
               onSeekBeat={takeEnd > 0 && (transport.mode === 'stopped' || replayKind === 'full' && (transport.mode === 'replaying' || transport.mode === 'paused')) ? seekFullReplay : undefined}
               linearPlayhead={take.notes.length > 0 && transport.mode !== 'playing' && transport.mode !== 'recording'}
               progression={progression}
-              visible={rollExpanded}
             />
             <p className="roll-caption">Select a note for its phrase evidence · ? marks a passage with no nearby resolution detected · arrows mark detected moves</p>
           </div>
@@ -1061,7 +1054,7 @@ export default function App() {
                     </>
                   ) : <p>No phrase evidence is linked to this note.</p>}
                 </div>
-              ) : <p className="analysis-prompt">{rollExpanded ? 'Select a note or arrow on the piano roll to inspect a passage.' : 'Expand the piano roll, or open an observation below to inspect a passage.'}</p>}
+              ) : <p className="analysis-prompt">Select a note or arrow on the piano roll to inspect a passage.</p>}
               <details className="evidence-overview">
                 <summary>All phrase evidence <span>{phraseEvidence.length}</span></summary>
                 <div className="evidence-list">
