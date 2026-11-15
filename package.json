@@ -2,6 +2,9 @@
   "name": "resolve-labs",
   "private": true,
   "version": "0.1.0",
+  "description": "Jazz improvisation practice with recording, replay, transcription, and evidence-based feedback.",
+  "homepage": "https://resolvelabs.study",
+  "repository": "https://github.com/MurdockMakes/ResolveLabs.git",
   "type": "module",
   "scripts": {
     "dev": "node server/dev.mjs",
