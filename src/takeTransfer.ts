@@ -4,7 +4,7 @@ import type { SaxKey } from './sax.ts';
 
 export const TAKE_FILE_FORMAT = 'changes-coach-takes';
 export const TAKE_FILE_VERSION = 1;
-export const TAKE_FILE_EXTENSION = '.changes-takes.json';
+export const TAKE_FILE_EXTENSION = '.resolve-labs-takes.json';
 
 const MAX_FILE_BYTES = 256 * 1024 * 1024;
 const MAX_TAKES = 1000;
@@ -82,7 +82,7 @@ function progression(value: unknown, where: string): Progression {
   const snapshot = record(value, `${where} progression`);
   const progressionId = id(snapshot.id, `${where} progression ID`);
   const current = PROGRESSIONS.find((entry) => entry.id === progressionId);
-  if (!current) throw new Error(`${where} uses a progression this version of Changes Coach does not support: ${progressionId}.`);
+  if (!current) throw new Error(`${where} uses a progression this version of Resolve Labs does not support: ${progressionId}.`);
   if (snapshot.form !== current.form || snapshot.keyId !== current.keyId ||
       snapshot.label !== current.label || snapshot.description !== current.description ||
       !Array.isArray(snapshot.chords) || snapshot.chords.length !== current.chords.length) {
@@ -225,7 +225,7 @@ export async function parseTakeTransferFile(file: Blob): Promise<BankedTake[]> {
     throw new Error('This take file is damaged or is not valid JSON.');
   }
   const document = record(parsed, 'Take file');
-  if (document.format !== TAKE_FILE_FORMAT) throw new Error('This is not a Changes Coach take file.');
+  if (document.format !== TAKE_FILE_FORMAT) throw new Error('This is not a Resolve Labs take file.');
   if (document.version !== TAKE_FILE_VERSION) throw new Error(`Unsupported take file version: ${String(document.version)}. This app supports version ${TAKE_FILE_VERSION}.`);
   finiteNumber(document.exportedAt, 'Take file export time');
   if (!Array.isArray(document.takes) || document.takes.length === 0 || document.takes.length > MAX_TAKES) {

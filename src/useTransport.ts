@@ -118,7 +118,7 @@ export function useTransport(
     }
   }, [getBeat, restartClock]);
 
-  const start = useCallback(async (nextMode: RunningMode, fromBeat = 0, rate = 1, untilBeat: number | null = null, countInBeats = 0) => {
+  const start = useCallback(async (nextMode: RunningMode, fromBeat = 0, rate = 1, untilBeat: number | null = null, countInBeats = 0): Promise<boolean> => {
     const startId = ++startIdRef.current;
     engineRef.current.stopTimed();
     const audioReady = engineRef.current.resume();
@@ -138,13 +138,15 @@ export function useTransport(
     setMode(modeRef.current);
     try {
       await audioReady;
-      if (startId !== startIdRef.current) return;
+      if (startId !== startIdRef.current) return false;
       // The four clicks start from a fresh origin after the output is audible.
       originRef.current = performance.now() - ((fromBeat - lead) * MS_PER_BEAT) / rate;
       audioReadyRef.current = true;
       restartClock();
+      return true;
     } catch {
       if (startId === startIdRef.current) stop();
+      return false;
     }
   }, [restartClock, stop]);
 

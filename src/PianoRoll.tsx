@@ -23,6 +23,7 @@ interface PianoRollProps {
   onSelectNote: (id: string) => void;
   onSeekBeat?: (beat: number) => void;
   linearPlayhead?: boolean;
+  visible?: boolean;
   progression: Progression;
 }
 
@@ -41,7 +42,7 @@ function noteRole(note: NoteEvent, progression: Progression) {
   return 'other';
 }
 
-export default function PianoRoll({ notes, pending, currentBeat, evidence, selectedEvidenceId, selectedNoteId, onSelectEvidence, onSelectNote, onSeekBeat, linearPlayhead = false, progression }: PianoRollProps) {
+export default function PianoRoll({ notes, pending, currentBeat, evidence, selectedEvidenceId, selectedNoteId, onSelectEvidence, onSelectNote, onSeekBeat, linearPlayhead = false, visible = true, progression }: PianoRollProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const evidenceByNote = useMemo(() => buildNoteEvidenceIndex(notes, evidence), [notes, evidence]);
   const noteById = useMemo(() => new Map(notes.map((note) => [note.id, note])), [notes]);
@@ -71,13 +72,13 @@ export default function PianoRoll({ notes, pending, currentBeat, evidence, selec
 
   useEffect(() => {
     const viewport = scrollRef.current;
-    if (!viewport) return;
+    if (!viewport || !visible) return;
     const x = noteX(playheadBeat);
     const margin = Math.min(130, viewport.clientWidth * 0.25);
     if (x < viewport.scrollLeft + margin || x > viewport.scrollLeft + viewport.clientWidth - margin) {
       viewport.scrollTo({ left: Math.max(0, x - viewport.clientWidth * 0.32), behavior: 'auto' });
     }
-  }, [Math.floor(playheadBeat * 2), progression.id, totalBeats]);
+  }, [Math.floor(playheadBeat * 2), progression.id, totalBeats, visible]);
 
   return (
     <div className="piano-roll-scroll" aria-label="Piano roll timeline" ref={scrollRef}>

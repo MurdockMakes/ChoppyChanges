@@ -22,6 +22,16 @@ import { analyzeMicAudio, buildSoloFeedback, unavailableMicAudio, type MicAudioA
 import SoloFeedback from './SoloFeedbackPanel';
 
 type PassageTarget = Pick<Resolution, 'startBeat' | 'endBeat' | 'title' | 'explanation'>;
+type RecordingSnapshot = {
+  notes: NoteEvent[];
+  source: TakeSource;
+  audio: MicAudioTake | null;
+  audioWarning: string;
+  edits: NoteEdit[];
+  beat: number;
+  practiceOf: PassageTarget | null;
+  replaySound: 'original' | 'notes';
+};
 
 export default function App() {
   const [progressionId, setProgressionId] = useState(DEFAULT_PROGRESSION.id);
@@ -34,6 +44,9 @@ export default function App() {
   const [fullReplayRate, setFullReplayRate] = useState(1);
   const [replaySound, setReplaySound] = useState<'original' | 'notes'>('original');
   const [replayError, setReplayError] = useState('');
+  const [transportError, setTransportError] = useState('');
+  const [micAudioWarning, setMicAudioWarning] = useState('');
+  const [rollExpanded, setRollExpanded] = useState(true);
   const [saxKey, setSaxKey] = useState<SaxKey>('concert');
   const [passCount, setPassCount] = useState('1');
   const [runStartBeat, setRunStartBeat] = useState(0);
@@ -50,6 +63,20 @@ export default function App() {
   const [bankAvailable, setBankAvailable] = useState(true);
   const [noteEdits, setNoteEdits] = useState<NoteEdit[]>([]);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+  const importButtonRef = useRef<HTMLButtonElement | null>(null);
+  const takeBankRef = useRef<HTMLElement | null>(null);
+  const replayRollToggleRef = useRef<HTMLButtonElement | null>(null);
+  const replayButtonRef = useRef<HTMLButtonElement | null>(null);
+  const pauseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const stopReplayButtonRef = useRef<HTMLButtonElement | null>(null);
+  const playChangesButtonRef = useRef<HTMLButtonElement | null>(null);
+  const transportStopButtonRef = useRef<HTMLButtonElement | null>(null);
+  const startMidiButtonRef = useRef<HTMLButtonElement | null>(null);
+  const startPianoButtonRef = useRef<HTMLButtonElement | null>(null);
+  const startMicButtonRef = useRef<HTMLButtonElement | null>(null);
+  const recordStopButtonRef = useRef<HTMLButtonElement | null>(null);
+  const performanceStopButtonRef = useRef<HTMLButtonElement | null>(null);
+  const recordingSnapshotRef = useRef<RecordingSnapshot | null>(null);
   const micCaptureEpochRef = useRef(0);
   const micCaptureStartRef = useRef(0);
   const micCaptureRateRef = useRef(1);
@@ -59,7 +86,7 @@ export default function App() {
     replaySessionRef.current?.advance(previousBeat, beat);
   }, []);
   const transport = useTransport(advanceReplay, progression,
-    (mode, beat) => { if (mode === 'recording') beginMicCapture(beat); },
+    (mode, beat) => { if (mode === 'recording') { recordingSnapshotRef.current = null; beginMicCapture(beat); } },
     (mode, beat) => { if (mode === 'recording') stopRecording(beat); },
   );
   const take = useTake(transport);
@@ -80,9 +107,7 @@ export default function App() {
   const onMicEnded = () => {
     if (recordingInputRef.current !== 'mic') return;
     if (transport.modeRef.current === 'counting-in') {
-      recordingInputRef.current = null;
-      setPracticeOf(null);
-      take.clearTake();
+      restoreCountInTake(true);
       return;
     }
     const endBeat = transport.getBeat();
@@ -100,7 +125,10 @@ export default function App() {
     const rate = micCaptureRateRef.current;
     setMicAudioFinalizing(true);
     void mic.finishCapture().then((blob) => {
-      if (epoch === micCaptureEpochRef.current && blob) setMicAudio({ blob, startBeat, endBeat, rate });
+      if (epoch === micCaptureEpochRef.current) {
+        if (blob) setMicAudio({ blob, startBeat, endBeat, rate });
+        else setMicAudioWarning('The notes were transcribed, but original microphone audio could not be saved. Replay uses the note preview.');
+      }
     }).finally(() => {
       if (epoch === micCaptureEpochRef.current) setMicAudioFinalizing(false);
     });
@@ -158,10 +186,15 @@ export default function App() {
 
   useEffect(() => {
     if (transport.mode !== 'stopped' || !replayKindRef.current) return;
+    const active = document.activeElement;
+    const returnFocus = active === pauseButtonRef.current || active === stopReplayButtonRef.current || active === document.body;
+    const returnToTransport = active === transportStopButtonRef.current;
     replaySessionRef.current?.stop();
     replaySessionRef.current = null;
     replayKindRef.current = null;
     setReplayKind(null);
+    if (returnFocus) requestAnimationFrame(() => replayButtonRef.current?.focus({ preventScroll: true }));
+    else if (returnToTransport) requestAnimationFrame(() => playChangesButtonRef.current?.focus({ preventScroll: true }));
   }, [transport.mode]);
 
   useEffect(() => () => {
@@ -225,7 +258,7 @@ export default function App() {
       }
     }
   }
-  const replayPressed = transport.mode === 'replaying'
+  const replayPressed = transport.mode === 'replaying' || transport.mode === 'paused'
     ? take.notes.filter((note) => transport.beat >= note.startBeat && transport.beat < note.startBeat + note.durationBeats).map((note) => note.pitch)
     : [];
   const pressed = [...new Set([...midi.pressed, ...replayPressed, ...(transport.mode === 'recording' && micLivePitch !== null ? [micLivePitch] : [])])];
@@ -244,7 +277,12 @@ export default function App() {
 
   function startChanges() {
     if (transport.modeRef.current !== 'stopped' || mic.requesting || micAudioFinalizing || bankBusy) return;
-    void transport.start('playing', 0, 1, prepareRun(), 4);
+    setTransportError('');
+    setReplayError('');
+    void transport.start('playing', 0, 1, prepareRun(), 4).then((started) => {
+      if (!started) setTransportError('Audio could not start. Check your browser audio output and try again.');
+      else requestAnimationFrame(() => transportStopButtonRef.current?.focus({ preventScroll: true }));
+    });
   }
 
   async function saveCurrentToBank() {
@@ -281,6 +319,8 @@ export default function App() {
       if (!saved) throw new Error('That saved take is no longer available.');
       if (!PROGRESSIONS.some((item) => item.id === saved.progressionId)) throw new Error('The saved chord progression is unavailable.');
       clearReplaySession();
+      setReplayError('');
+      setTransportError('');
       fullCursorArmedRef.current = false;
       invalidateCoach();
       if (saved.progressionId !== progression.id) {
@@ -295,6 +335,7 @@ export default function App() {
       recordingInputRef.current = null;
       setMicLivePitch(null);
       setMicAudio(saved.audio);
+      setMicAudioWarning(saved.source === 'mic' && !saved.audio ? 'Original microphone audio is unavailable for this take. Replay uses the note preview.' : '');
       setNoteEdits(saved.edits ?? []);
       setReplaySound('original');
       setSaxKey(saved.saxKey);
@@ -319,6 +360,7 @@ export default function App() {
       await deleteBankedTake(item.id);
       setBankedTakes(await listBankedTakes());
       setBankStatus(`Deleted “${item.name}”.`);
+      requestAnimationFrame(() => takeBankRef.current?.focus({ preventScroll: true }));
     } catch (error) {
       setBankError(true);
       setBankStatus(error instanceof Error ? error.message : 'Could not delete this take.');
@@ -381,8 +423,13 @@ export default function App() {
   }
 
   function stopReplay(atBeat?: number) {
+    const active = document.activeElement;
+    const returnFocus = active === pauseButtonRef.current || active === stopReplayButtonRef.current || active === replayButtonRef.current || active === document.body;
+    const returnToTransport = active === transportStopButtonRef.current;
     clearReplaySession();
     transport.stop(atBeat);
+    if (returnFocus) requestAnimationFrame(() => replayButtonRef.current?.focus({ preventScroll: true }));
+    else if (returnToTransport) requestAnimationFrame(() => playChangesButtonRef.current?.focus({ preventScroll: true }));
   }
 
   async function startReplay(kind: 'full' | 'passage', notes: NoteEvent[], fromBeat: number, rate: number, untilBeat: number) {
@@ -407,10 +454,12 @@ export default function App() {
       if (session instanceof RecordedAudioReplay) session.start(fromBeat, rate);
       await transport.prepareAudio();
       if (startId !== replayStartIdRef.current || transport.modeRef.current !== 'stopped') return;
-      await transport.start('replaying', fromBeat, rate, untilBeat);
+      const started = await transport.start('replaying', fromBeat, rate, untilBeat);
+      if (!started) throw new Error('Audio output did not start.');
       if (startId !== replayStartIdRef.current || !['replaying'].includes(transport.modeRef.current)) return;
       if (session instanceof RecordedAudioReplay) session.seek(transport.getBeat(), rate);
       else session.start(transport.getBeat(), rate);
+      requestAnimationFrame(() => (kind === 'full' ? pauseButtonRef.current : stopReplayButtonRef.current)?.focus({ preventScroll: true }));
     } catch {
       if (startId === replayStartIdRef.current) {
         setReplayError('Replay could not start. Try the note preview or another take.');
@@ -441,7 +490,10 @@ export default function App() {
       if (startId !== replayStartIdRef.current || !['replaying'].includes(transport.modeRef.current)) return;
       replaySessionRef.current?.start(transport.getBeat(), fullReplayRateRef.current);
     } catch {
-      if (startId === replayStartIdRef.current) stopReplay();
+      if (startId === replayStartIdRef.current) {
+        setReplayError('Replay could not resume. Check your browser audio output and try again.');
+        stopReplay();
+      }
     }
   }
 
@@ -487,12 +539,15 @@ export default function App() {
     const next = PROGRESSIONS.find((item) => item.id === nextId);
     if (!next) return;
     clearReplaySession();
+    setReplayError('');
+    setTransportError('');
     fullCursorArmedRef.current = false;
     invalidateCoach();
     takesByProgressionRef.current[progression.id] = { notes: take.notes.map((note) => ({ ...note })), source: take.source, audio: micAudio, edits: noteEdits };
     const saved = takesByProgressionRef.current[nextId];
     micCaptureEpochRef.current += 1;
     setMicAudio(saved?.audio ?? null);
+    setMicAudioWarning(saved?.source === 'mic' && !saved.audio ? 'Original microphone audio is unavailable for this take. Replay uses the note preview.' : '');
     setNoteEdits(saved?.edits ?? []);
     mic.stop();
     micSegmenterRef.current.reset();
@@ -524,7 +579,26 @@ export default function App() {
     setSelectedEvidenceId(id);
     setSelectedNoteId(noteId);
     transport.seek(evidence.startBeat);
-    if (scrollToDetails) requestAnimationFrame(() => document.getElementById('selected-passage')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
+    if (scrollToDetails) focusSelectedPassage();
+  }
+
+  function focusSelectedPassage() {
+    requestAnimationFrame(() => {
+      const detail = document.getElementById('selected-passage');
+      detail?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'nearest' });
+      detail?.focus({ preventScroll: true });
+    });
+  }
+
+  function togglePianoRoll(fromTakeHeading = false) {
+    const nextExpanded = !rollExpanded;
+    setRollExpanded(nextExpanded);
+    if (fromTakeHeading && !nextExpanded && (transport.mode === 'replaying' || transport.mode === 'paused')) {
+      requestAnimationFrame(() => {
+        document.getElementById('playback-workspace')?.scrollIntoView({ behavior: 'auto', block: 'start' });
+        replayRollToggleRef.current?.focus({ preventScroll: true });
+      });
+    }
   }
 
   function selectNote(id: string) {
@@ -540,11 +614,7 @@ export default function App() {
 
   function selectFeedbackNote(id: string) {
     selectNote(id);
-    requestAnimationFrame(() => {
-      const detail = document.getElementById('selected-passage');
-      detail?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      detail?.focus({ preventScroll: true });
-    });
+    focusSelectedPassage();
   }
 
   function selectCoachEvidence(id: string) {
@@ -559,72 +629,105 @@ export default function App() {
     void startReplay('passage', notes, fromBeat, 0.6, untilBeat);
   }
 
-  function startMidiTake(fromBeat = 0, rate = 1, practiceTarget: PassageTarget | null = null) {
-    if (!midi.connected || transport.modeRef.current !== 'stopped' || micAudioFinalizing || bankBusy) return;
+  async function beginRecordedTake(input: 'midi' | 'piano' | 'mic', fromBeat: number, rate: number, practiceTarget: PassageTarget | null) {
+    const snapshot: RecordingSnapshot = {
+      notes: take.notes.map((note) => ({ ...note })), source: take.source, audio: micAudio,
+      audioWarning: micAudioWarning, edits: noteEdits.map((edit) => ({ ...edit })), beat: transport.beat, practiceOf, replaySound,
+    };
+    recordingSnapshotRef.current = snapshot;
+    recordingInputRef.current = input;
+    setTransportError('');
+    const started = await take.startTake(fromBeat, rate, input, prepareRun(fromBeat), 4);
+    if (recordingSnapshotRef.current !== snapshot) return false;
+    if (!started) {
+      recordingSnapshotRef.current = null;
+      recordingInputRef.current = null;
+      transport.seek(snapshot.beat);
+      setTransportError('Audio could not start. Your previous take is still here. Check your browser audio output and try again.');
+      return false;
+    }
     clearReplaySession();
+    setReplayError('');
     fullCursorArmedRef.current = false;
     invalidateCoach();
     micCaptureEpochRef.current += 1;
     setMicAudio(null);
+    setMicAudioWarning('');
     setNoteEdits([]);
-    recordingInputRef.current = 'midi';
     setPracticeOf(practiceTarget);
     setSelectedEvidenceId(null);
     setSelectedNoteId(null);
-    void take.startTake(fromBeat, rate, 'midi', prepareRun(fromBeat), 4);
+    if (input === 'mic') {
+      setReplaySound('original');
+      micSegmenterRef.current.reset();
+      setMicLivePitch(null);
+      micCaptureRateRef.current = rate;
+    }
+    if (input !== 'piano') requestAnimationFrame(() => recordStopButtonRef.current?.focus({ preventScroll: true }));
+    return true;
+  }
+
+  function focusRecordingStart(input: 'midi' | 'piano' | 'mic' | null) {
+    (input === 'midi' ? startMidiButtonRef.current : input === 'mic' ? startMicButtonRef.current : startPianoButtonRef.current)?.focus({ preventScroll: true });
+  }
+
+  function startMidiTake(fromBeat = 0, rate = 1, practiceTarget: PassageTarget | null = null) {
+    if (!midi.connected || transport.modeRef.current !== 'stopped' || micAudioFinalizing || bankBusy) return;
+    void beginRecordedTake('midi', fromBeat, rate, practiceTarget);
   }
 
   function startPianoTake(fromBeat = 0, rate = 1, practiceTarget: PassageTarget | null = null) {
     if (transport.modeRef.current !== 'stopped' || mic.requesting || micAudioFinalizing || bankBusy) return;
-    clearReplaySession();
-    fullCursorArmedRef.current = false;
-    invalidateCoach();
-    micCaptureEpochRef.current += 1;
-    setMicAudio(null);
-    setNoteEdits([]);
-    recordingInputRef.current = 'piano';
-    setPracticeOf(practiceTarget);
-    setSelectedEvidenceId(null);
-    setSelectedNoteId(null);
-    void take.startTake(fromBeat, rate, 'piano', prepareRun(fromBeat), 4);
+    void beginRecordedTake('piano', fromBeat, rate, practiceTarget).then((started) => {
+      if (started) requestAnimationFrame(() => {
+        document.getElementById('playback-workspace')?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+        document.querySelector<HTMLButtonElement>('.computer-keys-toggle')?.focus({ preventScroll: true });
+      });
+    });
   }
 
   async function startMicTake(fromBeat = 0, rate = 1, practiceTarget: PassageTarget | null = null) {
     if (transport.modeRef.current !== 'stopped' || micAudioFinalizing || bankBusy) return;
-    clearReplaySession();
-    fullCursorArmedRef.current = false;
-    invalidateCoach();
-    const started = await mic.start();
-    if (!started) return;
-    micCaptureEpochRef.current += 1;
-    setMicAudio(null);
-    setNoteEdits([]);
-    setReplaySound('original');
-    micSegmenterRef.current.reset();
-    recordingInputRef.current = 'mic';
-    setMicLivePitch(null);
-    setPracticeOf(practiceTarget);
-    setSelectedEvidenceId(null);
-    setSelectedNoteId(null);
-    micCaptureRateRef.current = rate;
-    await take.startTake(fromBeat, rate, 'mic', prepareRun(fromBeat), 4);
+    const micStarted = await mic.start();
+    if (!micStarted) return;
+    if (transport.modeRef.current !== 'stopped' || bankBusy) { mic.stop(); return; }
+    if (!await beginRecordedTake('mic', fromBeat, rate, practiceTarget)) mic.stop();
   }
 
   function beginMicCapture(beat: number) {
     if (recordingInputRef.current !== 'mic') return;
     micCaptureStartRef.current = beat;
-    mic.startCapture();
+    if (!mic.startCapture()) setMicAudioWarning('The sax notes are being transcribed, but original audio capture is unavailable. Replay will use the note preview.');
+  }
+
+  function restoreCountInTake(microphoneEnded = false) {
+    const snapshot = recordingSnapshotRef.current;
+    const stoppedInput = recordingInputRef.current;
+    const fromCompactStop = document.activeElement === performanceStopButtonRef.current;
+    const fromSetupStop = document.activeElement === recordStopButtonRef.current || document.activeElement === transportStopButtonRef.current;
+    recordingSnapshotRef.current = null;
+    if (recordingInputRef.current === 'mic' && !microphoneEnded) mic.stop();
+    recordingInputRef.current = null;
+    if (!snapshot) { take.clearTake(); return; }
+    setMicAudio(snapshot.audio);
+    setMicAudioWarning(snapshot.audioWarning);
+    setNoteEdits(snapshot.edits);
+    setPracticeOf(snapshot.practiceOf);
+    setReplaySound(snapshot.replaySound);
+    take.restoreTake(snapshot.notes, snapshot.source);
+    transport.seek(snapshot.beat);
+    if (fromCompactStop) requestAnimationFrame(() => replayRollToggleRef.current?.focus({ preventScroll: true }));
+    else if (fromSetupStop) requestAnimationFrame(() => focusRecordingStart(stoppedInput));
   }
 
   function stopRecording(atBeat?: number) {
     if (transport.modeRef.current === 'counting-in') {
-      if (recordingInputRef.current === 'mic') mic.stop();
-      recordingInputRef.current = null;
-      setPracticeOf(null);
-      setNoteEdits([]);
-      take.clearTake();
+      restoreCountInTake();
       return;
     }
+    const stoppedInput = recordingInputRef.current;
+    const fromCompactStop = document.activeElement === performanceStopButtonRef.current;
+    const fromSetupStop = document.activeElement === recordStopButtonRef.current || document.activeElement === transportStopButtonRef.current;
     if (recordingInputRef.current === 'mic') {
       const endBeat = atBeat ?? transport.getBeat();
       commitMicAudio(endBeat);
@@ -635,6 +738,8 @@ export default function App() {
     }
     recordingInputRef.current = null;
     take.stopTake(atBeat);
+    if (fromCompactStop) requestAnimationFrame(() => replayRollToggleRef.current?.focus({ preventScroll: true }));
+    else if (fromSetupStop) requestAnimationFrame(() => focusRecordingStart(stoppedInput));
   }
 
   function stopTransport() {
@@ -643,17 +748,23 @@ export default function App() {
     else if (mode === 'replaying' || mode === 'paused') {
       if (replayKindRef.current === 'full') stopFullReplay();
       else stopReplay();
-    } else transport.stop();
+    } else {
+      transport.stop();
+      if (document.activeElement === transportStopButtonRef.current) requestAnimationFrame(() => playChangesButtonRef.current?.focus({ preventScroll: true }));
+    }
   }
 
   function discardAndLoadExample() {
     if (bankBusy) return;
     clearReplaySession();
+    setReplayError('');
+    setTransportError('');
     fullCursorArmedRef.current = false;
     invalidateCoach();
     micCaptureEpochRef.current += 1;
     setMicAudioFinalizing(false);
     setMicAudio(null);
+    setMicAudioWarning('');
     setNoteEdits([]);
     mic.stop();
     micSegmenterRef.current.reset();
@@ -668,11 +779,14 @@ export default function App() {
   function clearTake() {
     if (bankBusy) return;
     clearReplaySession();
+    setReplayError('');
+    setTransportError('');
     fullCursorArmedRef.current = false;
     invalidateCoach();
     micCaptureEpochRef.current += 1;
     setMicAudioFinalizing(false);
     setMicAudio(null);
+    setMicAudioWarning('');
     setNoteEdits([]);
     mic.stop();
     micSegmenterRef.current.reset();
@@ -696,14 +810,14 @@ export default function App() {
     <main className="app-shell">
       <header className="app-header">
         <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true">♬</div>
+          <div className="brand-mark" aria-hidden="true">R</div>
           <div>
             <p className="eyebrow">JAZZ PRACTICE LAB</p>
-            <h1>Changes Coach<span className="brand-period">.</span></h1>
+            <h1>Resolve Labs<span className="brand-period">.</span></h1>
           </div>
         </div>
         <div className="header-right">
-          <span className={`mode-badge mode-${transport.mode}`}><i />{transport.mode === 'stopped' ? 'READY' : transport.mode === 'counting-in' ? `COUNT IN ${transport.countInRemaining}` : transport.mode === 'playing' ? 'PLAYING' : transport.mode === 'recording' ? recordingInputRef.current === 'mic' ? 'SAX TAKE' : recordingInputRef.current === 'piano' ? 'PIANO TAKE' : 'MIDI TAKE' : transport.mode === 'paused' ? 'REPLAY PAUSED' : 'REPLAYING'}</span>
+          <span className={`mode-badge mode-${transport.mode}`} role="status" aria-live="polite"><i aria-hidden="true" />{transport.mode === 'stopped' ? 'READY' : transport.mode === 'counting-in' ? `COUNT IN ${transport.countInRemaining}` : transport.mode === 'playing' ? 'PLAYING' : transport.mode === 'recording' ? recordingInputRef.current === 'mic' ? 'SAX TAKE' : recordingInputRef.current === 'piano' ? 'PIANO TAKE' : 'MIDI TAKE' : transport.mode === 'paused' ? 'REPLAY PAUSED' : 'REPLAYING'}</span>
           <span className="header-subtitle">Hear the changes. See the resolution.</span>
         </div>
       </header>
@@ -739,15 +853,16 @@ export default function App() {
           </fieldset>
           <div className="record-controls">
             <button className="button button-secondary" onClick={midi.connect} disabled={!midi.supported || midi.connected}>Connect MIDI</button>
-            <button className="button button-primary" onClick={() => startMidiTake()} disabled={!midi.connected || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing || bankBusy}>Start MIDI take</button>
-            <button className="button button-primary" onClick={() => startPianoTake()} disabled={transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing || bankBusy}>Start piano take</button>
-            <button className="button button-mic" onClick={() => void startMicTake()} disabled={!mic.supported || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing || bankBusy}>{mic.requesting ? 'Requesting mic…' : 'Start sax take'}</button>
-            <button className="button button-stop" onClick={() => stopRecording()} disabled={transport.mode !== 'recording' && !(transport.mode === 'counting-in' && recordingInputRef.current !== null)}>Stop take</button>
+            <button ref={startMidiButtonRef} className="button button-primary" onClick={() => startMidiTake()} disabled={!midi.connected || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing || bankBusy}>Start MIDI take</button>
+            <button ref={startPianoButtonRef} className="button button-primary" onClick={() => startPianoTake()} disabled={transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing || bankBusy}>Start piano take</button>
+            <button ref={startMicButtonRef} className="button button-mic" onClick={() => void startMicTake()} disabled={!mic.supported || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing || bankBusy}>{mic.requesting ? 'Requesting mic…' : 'Start sax take'}</button>
+            <button ref={recordStopButtonRef} className="button button-stop" onClick={() => stopRecording()} disabled={transport.mode !== 'recording' && !(transport.mode === 'counting-in' && recordingInputRef.current !== null)}>Stop take</button>
             <button className="button button-example" onClick={discardAndLoadExample} disabled={bankBusy}>Load example take</button>
           </div>
+          {transportError && <p className="transport-error" role="alert">{transportError}</p>}
           <div className="transport-controls">
-            <button onClick={startChanges} disabled={transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing || bankBusy}>▶ &nbsp; Play changes</button>
-            <button onClick={stopTransport} disabled={transport.mode === 'stopped'}>■ &nbsp; Stop</button>
+            <button ref={playChangesButtonRef} onClick={startChanges} disabled={transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing || bankBusy}>▶ &nbsp; Play changes</button>
+            <button ref={transportStopButtonRef} onClick={stopTransport} disabled={transport.mode === 'stopped'}>■ &nbsp; Stop</button>
             <button onClick={clearTake} disabled={bankBusy || take.notes.length === 0 && take.pending.length === 0 && !mic.active && !micAudio && !micAudioFinalizing}>Clear</button>
           </div>
           <div className="repeat-controls">
@@ -811,23 +926,58 @@ export default function App() {
         </section>
       </div>
 
-      <Keyboard
-        currentBeat={transport.beat}
-        pressed={pressed}
-        progression={progression}
-        onNoteOn={(pitch) => { transport.pianoNoteOn(pitch); take.noteOn(pitch, 'piano'); }}
-        onNoteOff={(pitch) => { transport.pianoNoteOff(pitch); take.noteOff(pitch, 'piano'); }}
-      />
+      <div id="playback-workspace" className="playback-workspace">
+        <Keyboard
+          currentBeat={transport.beat}
+          pressed={pressed}
+          followPressed={transport.mode === 'replaying' || transport.mode === 'paused'}
+          playbackPaused={transport.mode === 'paused'}
+          progression={progression}
+          onNoteOn={(pitch) => { transport.pianoNoteOn(pitch); take.noteOn(pitch, 'piano'); }}
+          onNoteOff={(pitch) => { transport.pianoNoteOff(pitch); take.noteOff(pitch, 'piano'); }}
+        />
+
+        {(transport.mode === 'recording' || transport.mode === 'counting-in' && recordingInputRef.current !== null) &&
+          <div className="performance-status">
+            <span role="status" aria-live="polite">{transport.mode === 'counting-in' ? `Count in ${transport.countInRemaining}; get ready to play.` : `Recording ${recordingInputRef.current === 'mic' ? 'sax' : recordingInputRef.current === 'piano' ? 'piano' : 'MIDI'} take · pass ${passAtBeat(progression, runStartBeat, transport.beat, runPasses)} of ${runPasses}`}</span>
+            <button ref={performanceStopButtonRef} type="button" onClick={() => stopRecording()}>Stop take</button>
+          </div>}
+
+        <section className="panel take-replay replay-dock" aria-label="Full take replay controls">
+          {replayError && <p className="take-replay-error" role="alert">{replayError}</p>}
+          <div className="take-replay-buttons">
+            <button ref={replayButtonRef} type="button" onClick={startFullReplay} disabled={takeEnd <= 0 || transport.mode !== 'stopped' || micAudioFinalizing || bankBusy}>▶ Replay full take</button>
+            <button ref={pauseButtonRef} type="button" onClick={replayKind === 'full' && transport.mode === 'paused' ? () => void resumeFullReplay() : pauseFullReplay} disabled={replayKind !== 'full' || (transport.mode !== 'replaying' && transport.mode !== 'paused')}>{transport.mode === 'paused' && replayKind === 'full' ? '▶ Resume' : 'Ⅱ Pause'}</button>
+            <button ref={stopReplayButtonRef} type="button" onClick={replayKind === 'full' ? stopFullReplay : () => stopReplay()} disabled={!replayKind || (transport.mode !== 'replaying' && transport.mode !== 'paused')}>■ Stop replay</button>
+            <button ref={replayRollToggleRef} type="button" className="roll-toggle" aria-expanded={rollExpanded} aria-controls="piano-roll-region" onClick={() => togglePianoRoll()}>{rollExpanded ? 'Collapse piano roll' : 'Expand piano roll'}</button>
+            <label>Speed <select aria-label="Full take playback speed" value={fullReplayRate} onChange={(event) => changeFullReplayRate(Number(event.target.value))} disabled={transport.mode === 'recording' || transport.mode === 'playing' || replayKind === 'passage'}>
+              {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
+            </select></label>
+            {take.source === 'mic' && micAudio && <label>Sound <select aria-label="Replay sound" value={replaySound} onChange={(event) => { if (transport.mode === 'replaying' || transport.mode === 'paused') stopReplay(); setReplaySound(event.target.value as 'original' | 'notes'); }}>
+              <option value="original">Original audio</option><option value="notes">Note preview</option>
+            </select></label>}
+          </div>
+          <div className="take-replay-position">
+            <label htmlFor="take-replay-seek">Playhead</label>
+            <input id="take-replay-seek" aria-label="Seek full take" type="range" min="0" max={takeEnd || 1} step="0.01" value={Math.min(transport.beat, takeEnd || 1)} onChange={(event) => seekFullReplay(Number(event.target.value))} disabled={takeEnd <= 0 || transport.mode === 'recording' || transport.mode === 'playing' || replayKind === 'passage'} />
+            <output htmlFor="take-replay-seek">{formatPosition(Math.min(transport.beat, takeEnd))} · {Math.min(transport.beat, takeEnd).toFixed(2)} / {takeEnd.toFixed(2)} beats</output>
+          </div>
+        </section>
+      </div>
 
       <div className="results-grid">
         <section className="panel take-panel" aria-label="Recorded take">
           <div className="panel-heading take-heading">
             <div><p className="eyebrow">03 / YOUR TAKE</p><h2>Piano roll</h2></div>
-            <span className="note-count">{take.notes.length} {take.notes.length === 1 ? 'NOTE' : 'NOTES'}</span>
+            <div className="take-heading-actions">
+              <span className="note-count">{take.notes.length} {take.notes.length === 1 ? 'NOTE' : 'NOTES'}</span>
+              <button type="button" className="roll-toggle" aria-expanded={rollExpanded} aria-controls="piano-roll-region" onClick={() => togglePianoRoll(true)}>{rollExpanded ? 'Collapse piano roll' : 'Expand piano roll'}</button>
+            </div>
           </div>
-          <p className="take-summary">{transport.mode === 'recording' ? recordingInputRef.current === 'mic' ? 'Listening for a single-note sax phrase…' : recordingInputRef.current === 'piano' ? 'Recording on-screen piano notes…' : 'Recording MIDI notes…' : micAudioFinalizing ? 'Saving your microphone audio…' : take.source === 'example' ? 'Example take loaded. Select a note on the roll to inspect its evidence.' : take.source === 'midi' ? 'MIDI take captured. Select a note on the roll to inspect its evidence.' : take.source === 'piano' ? 'Piano take captured. Select a note on the roll to inspect its evidence.' : take.source === 'mic' ? 'Sax phrase transcribed in concert pitch. Replay uses your microphone audio when available; note edits affect the transcription only.' : 'Play the piano freely, start a take, or load the example.'}{take.pending.length ? ` ${take.pending.length} held.` : ''}</p>
+          <p className="take-summary">{transport.mode === 'recording' ? recordingInputRef.current === 'mic' ? 'Listening for a single-note sax phrase…' : recordingInputRef.current === 'piano' ? 'Recording on-screen piano notes…' : 'Recording MIDI notes…' : micAudioFinalizing ? 'Saving your microphone audio…' : take.source === 'example' ? 'Example take loaded.' : take.source === 'midi' ? 'MIDI take captured.' : take.source === 'piano' ? 'Piano take captured.' : take.source === 'mic' ? 'Sax phrase transcribed in concert pitch. Replay uses your microphone audio when available; note edits affect the transcription only.' : 'Play the piano freely, start a take, or load the example.'}{take.pending.length ? ` ${take.pending.length} held.` : ''}</p>
+          {micAudioWarning && <p className="mic-audio-warning" role="alert">{micAudioWarning}</p>}
           {practiceOf && <p className="practice-context"><strong>Practice target:</strong> {practiceOf.explanation} {transport.mode === 'recording' ? 'Play the passage, then stop the take to see fresh evidence.' : 'Your new take is shown below.'}</p>}
-          <section className="take-bank" aria-label="Take bank">
+          <section className="take-bank" aria-label="Take bank" ref={takeBankRef} tabIndex={-1}>
             <div className="take-bank-heading"><div><strong>Take bank</strong><small>Saved in this browser for this site</small></div><span>{bankedTakes.length} saved</span></div>
             <div className="take-bank-save">
               <input aria-label="Name this take" type="text" maxLength={80} placeholder="Name this take (optional)" value={bankName} onChange={(event) => setBankName(event.target.value)} disabled={bankBusy || !bankAvailable} />
@@ -835,8 +985,8 @@ export default function App() {
             </div>
             <div className="take-bank-transfer" aria-label="Import and export take files">
               <button type="button" onClick={() => void exportFromBank()} disabled={!bankAvailable || bankLoading || bankBusy || transport.mode !== 'stopped' || micAudioFinalizing || bankedTakes.length === 0}>Export all takes</button>
-              <button type="button" onClick={() => importInputRef.current?.click()} disabled={!bankAvailable || bankLoading || bankBusy || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>Import take file</button>
-              <input ref={importInputRef} type="file" accept=".json,.changes-takes.json,application/json" hidden aria-label="Choose a Changes Coach take file" onChange={(event) => void importIntoBank(event.currentTarget.files?.[0])} />
+              <button type="button" ref={importButtonRef} onClick={() => importInputRef.current?.click()} disabled={!bankAvailable || bankLoading || bankBusy || transport.mode !== 'stopped' || mic.requesting || micAudioFinalizing}>Import take file</button>
+              <input ref={importInputRef} type="file" accept=".json,.resolve-labs-takes.json,.changes-takes.json,application/json" hidden aria-label="Choose a Resolve Labs take file" onChange={(event) => { void importIntoBank(event.currentTarget.files?.[0]).finally(() => importButtonRef.current?.focus()); }} />
             </div>
             <p className="take-bank-hint">Take files include edited notes and available microphone audio. Import and export stay on this device.</p>
             {bankStatus && <p className={`take-bank-status${bankError ? ' take-bank-status-error' : ''}`} role={bankError ? 'alert' : 'status'}>{bankStatus}</p>}
@@ -849,40 +999,24 @@ export default function App() {
               </li>)}
             </ul>}
           </section>
-          <div className="take-replay" aria-label="Full take replay controls">
-            {replayError && <p className="take-replay-error" role="alert">{replayError}</p>}
-            <div className="take-replay-buttons">
-              <button type="button" onClick={startFullReplay} disabled={takeEnd <= 0 || transport.mode !== 'stopped' || micAudioFinalizing || bankBusy}>▶ Replay full take</button>
-              <button type="button" onClick={replayKind === 'full' && transport.mode === 'paused' ? () => void resumeFullReplay() : pauseFullReplay} disabled={replayKind !== 'full' || (transport.mode !== 'replaying' && transport.mode !== 'paused')}>{transport.mode === 'paused' && replayKind === 'full' ? '▶ Resume' : 'Ⅱ Pause'}</button>
-              <button type="button" onClick={stopFullReplay} disabled={replayKind !== 'full' || (transport.mode !== 'replaying' && transport.mode !== 'paused')}>■ Stop replay</button>
-              <label>Speed <select aria-label="Full take playback speed" value={fullReplayRate} onChange={(event) => changeFullReplayRate(Number(event.target.value))} disabled={transport.mode === 'recording' || transport.mode === 'playing' || replayKind === 'passage'}>
-                {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => <option key={rate} value={rate}>{rate}×</option>)}
-              </select></label>
-              {take.source === 'mic' && micAudio && <label>Sound <select aria-label="Replay sound" value={replaySound} onChange={(event) => { if (transport.mode === 'replaying' || transport.mode === 'paused') stopReplay(); setReplaySound(event.target.value as 'original' | 'notes'); }}>
-                <option value="original">Original audio</option><option value="notes">Note preview</option>
-              </select></label>}
-            </div>
-            <div className="take-replay-position">
-              <label htmlFor="take-replay-seek">Playhead</label>
-              <input id="take-replay-seek" aria-label="Seek full take" type="range" min="0" max={takeEnd || 1} step="0.01" value={Math.min(transport.beat, takeEnd || 1)} onChange={(event) => seekFullReplay(Number(event.target.value))} disabled={takeEnd <= 0 || transport.mode === 'recording' || transport.mode === 'playing' || replayKind === 'passage'} />
-              <output htmlFor="take-replay-seek">{formatPosition(Math.min(transport.beat, takeEnd))} · {Math.min(transport.beat, takeEnd).toFixed(2)} / {takeEnd.toFixed(2)} beats</output>
-            </div>
+          <div id="piano-roll-region" hidden={!rollExpanded}>
+            <PianoRoll
+              notes={take.notes}
+              pending={take.pending}
+              currentBeat={transport.beat}
+              evidence={phraseEvidence}
+              selectedEvidenceId={selectedEvidenceId}
+              selectedNoteId={selectedNoteId}
+              onSelectEvidence={(id) => selectEvidence(id)}
+              onSelectNote={selectNote}
+              onSeekBeat={takeEnd > 0 && (transport.mode === 'stopped' || replayKind === 'full' && (transport.mode === 'replaying' || transport.mode === 'paused')) ? seekFullReplay : undefined}
+              linearPlayhead={take.notes.length > 0 && transport.mode !== 'playing' && transport.mode !== 'recording'}
+              progression={progression}
+              visible={rollExpanded}
+            />
+            <p className="roll-caption">Select a note for its phrase evidence · ? marks a passage with no nearby resolution detected · arrows mark detected moves</p>
           </div>
-          <PianoRoll
-            notes={take.notes}
-            pending={take.pending}
-            currentBeat={transport.beat}
-            evidence={phraseEvidence}
-            selectedEvidenceId={selectedEvidenceId}
-            selectedNoteId={selectedNoteId}
-            onSelectEvidence={(id) => selectEvidence(id)}
-            onSelectNote={selectNote}
-            onSeekBeat={takeEnd > 0 && (transport.mode === 'stopped' || replayKind === 'full' && (transport.mode === 'replaying' || transport.mode === 'paused')) ? seekFullReplay : undefined}
-            linearPlayhead={take.notes.length > 0 && transport.mode !== 'playing' && transport.mode !== 'recording'}
-            progression={progression}
-          />
           <TranscriptionEditor notes={take.notes} onChange={(updated) => { if (transport.mode === 'replaying' || transport.mode === 'paused') stopReplay(); fullCursorArmedRef.current = false; invalidateCoach(); setNoteEdits((previous) => [...previous, ...diffNoteEdits(take.notes, updated)]); take.replaceNotes(updated); }} visible={(take.source === 'mic' || take.source === 'example') && transport.mode !== 'recording'} origin={take.source === 'example' ? 'example' : 'mic'} progression={progression} />
-          <p className="roll-caption">Select a note for its phrase evidence · ? marks a passage with no nearby resolution detected · arrows mark detected moves</p>
         </section>
 
         <section className="panel analysis-panel" aria-label="Take analysis">
@@ -927,7 +1061,7 @@ export default function App() {
                     </>
                   ) : <p>No phrase evidence is linked to this note.</p>}
                 </div>
-              ) : <p className="analysis-prompt">Select a note or arrow on the piano roll to inspect a passage.</p>}
+              ) : <p className="analysis-prompt">{rollExpanded ? 'Select a note or arrow on the piano roll to inspect a passage.' : 'Expand the piano roll, or open an observation below to inspect a passage.'}</p>}
               <details className="evidence-overview">
                 <summary>All phrase evidence <span>{phraseEvidence.length}</span></summary>
                 <div className="evidence-list">
@@ -937,7 +1071,7 @@ export default function App() {
                       type="button"
                       className={`evidence-row ${item.kind === 'no-nearby-resolution' ? 'neutral' : item.kind} ${selectedEvidenceId === item.id ? 'selected' : ''}`}
                       aria-pressed={selectedEvidenceId === item.id}
-                      onClick={() => selectEvidence(item.id)}
+                      onClick={() => selectEvidence(item.id, null, true)}
                     >
                       <strong>{item.title}</strong><small>{formatPosition(item.startBeat)}</small>
                     </button>

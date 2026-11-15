@@ -49,6 +49,9 @@ export function useMicrophone(onFrame: (frame: MicFrame) => void, onEnded?: () =
 
   const startCapture = useCallback((): boolean => {
     const stream = streamRef.current;
+    // A failed new capture must never reuse audio from a previous sax take.
+    captureRef.current = null;
+    recorderRef.current = null;
     if (!stream || typeof MediaRecorder === 'undefined') return false;
     try {
       const recorder = new MediaRecorder(stream);

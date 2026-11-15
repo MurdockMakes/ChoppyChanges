@@ -2,6 +2,8 @@
 .keyboard-card-head { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
 .keyboard-card-head h2 { margin: 3px 0 0; font-size: clamp(21px, 2vw, 29px); letter-spacing: -.04em; }
 .keyboard-card-head h2 span { color: var(--green, #b1fa79); }
+.keyboard-head-aside { display: grid; gap: 5px; justify-items: end; min-width: 0; }
+.replay-active-notes { max-width: min(100%, 420px); margin: 0; padding: 5px 8px; border: 1px solid #779f7b; border-radius: 7px; color: #e4f8dc; background: #294638; font-size: 12px; font-weight: 750; line-height: 1.35; text-align: right; overflow-wrap: anywhere; }
 .computer-keys-control { display: flex; flex-wrap: wrap; align-items: center; gap: 9px 13px; margin: 0 0 13px; }
 .computer-keys-toggle { border: 1px solid #61766e; border-radius: 7px; padding: 8px 12px; color: #edf2ed; background: #25332e; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; }
 .computer-keys-toggle:hover { border-color: #b1fa79; }
@@ -37,8 +39,15 @@
 .piano-key.black .piano-key-name { font-size: 9px; }
 .piano-key.black .piano-key-role { font-size: 7px; }
 .keyboard-help { margin: 9px 0 0; color: var(--muted, #9caeaa); font-size: 11px; line-height: 1.4; }
+.keyboard-guide-details { margin-top: 8px; border: 1px solid #405c55; border-radius: 8px; background: #182d2b; }
+.keyboard-guide-details summary { display: flex; align-items: center; min-height: 44px; padding: 8px 12px; color: #d9e9d9; font-size: 12px; font-weight: 750; cursor: pointer; }
+.keyboard-guide-details summary::before { content: '▸'; margin-right: 8px; color: #b1f47e; }
+.keyboard-guide-details[open] summary::before { content: '▾'; }
+.keyboard-guide-details summary:focus-visible { outline: 3px solid #f3c573; outline-offset: 2px; }
+.keyboard-guide-details .keyboard-help { margin: 0; padding: 0 12px; }
+.keyboard-guide-details .keyboard-legend { padding: 11px 12px 12px; }
 .keyboard-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; padding-top: 15px; color: var(--muted, #9caeaa); font-size: 11px; font-weight: 600; }
 .keyboard-legend span { display: inline-flex; align-items: center; gap: 7px; }
 .keyboard-legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; }
 .legend-root { background: #62b7da; }.legend-guide { background: #adf476; }.legend-fifth { background: #d8efb8; }.legend-tension { background: #f9cb75; }.legend-next { border: 2px solid #ff8f72; }.legend-pressed { border: 2px solid #fff; background: #435753; }
-@media (max-width: 700px) { .keyboard-card-head { align-items: start; flex-direction: column; gap: 8px; } .next-hint { text-align: left; } }
+@media (max-width: 700px) { .keyboard-card-head { align-items: start; flex-direction: column; gap: 8px; } .keyboard-head-aside { justify-items: start; } .next-hint, .replay-active-notes { text-align: left; } }

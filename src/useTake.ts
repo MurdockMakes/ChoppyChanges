@@ -38,13 +38,15 @@ export function useTake(transport: Transport) {
     setPending(captureRef.current.pending());
   }, [addCompleted, transport]);
 
-  const startTake = useCallback(async (fromBeat = 0, rate = 1, input: 'midi' | 'mic' | 'piano' = 'midi', untilBeat: number | null = null, countInBeats = 0) => {
+  const startTake = useCallback(async (fromBeat = 0, rate = 1, input: 'midi' | 'mic' | 'piano' = 'midi', untilBeat: number | null = null, countInBeats = 0): Promise<boolean> => {
+    const started = await transport.start('recording', fromBeat, rate, untilBeat, countInBeats);
+    if (!started) return false;
     captureRef.current.reset();
     setNotes([]);
     setPending([]);
     sourceRef.current = input;
     setSource(input);
-    await transport.start('recording', fromBeat, rate, untilBeat, countInBeats);
+    return true;
   }, [transport]);
 
   const appendNotes = useCallback((incoming: NoteEvent[]) => {

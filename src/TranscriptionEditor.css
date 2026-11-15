@@ -1,12 +1,17 @@
-.transcription-editor { margin-top: 14px; padding: 14px; border: 1px solid #476360; border-radius: 12px; background: #102126; }
+.transcription-editor { min-width: 0; max-width: 100%; margin-top: 14px; padding: 14px; border: 1px solid #476360; border-radius: 12px; background: #102126; }
 .transcription-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .transcription-editor-head h3 { margin: 4px 0 0; color: var(--text, #f3f3e9); font-size: 17px; letter-spacing: -.02em; }
-.transcription-editor-head > button { flex: 0 0 auto; min-height: 40px; padding: 7px 10px; border: 1px solid #7da77c; border-radius: 8px; color: #e7f5d7; background: #2b5138; font-size: 11px; font-weight: 750; }
+.transcription-editor-count { margin: 3px 0 0; color: #aac6bb; font-size: 11px; }
+.transcription-editor-head > button { flex: 0 0 auto; min-height: 44px; padding: 8px 12px; border: 1px solid #7da77c; border-radius: 8px; color: #e7f5d7; background: #2b5138; font-size: 12px; font-weight: 750; }
 .transcription-editor-head > button:hover:not(:disabled) { background: #396747; }
 .transcription-editor-head > button:disabled { opacity: .48; cursor: not-allowed; }
 .transcription-editor-help { margin: 9px 0 11px; color: var(--muted, #9eb5b4); font-size: 11px; line-height: 1.45; }
+.transcription-editor-limit, .transcription-editor-message { margin: 0 0 9px; color: #d5e8ce; font-size: 11px; line-height: 1.45; }
+.transcription-editor-limit { color: #d2c59b; }
+.transcription-editor-message.is-error { color: #ffd0c6; }
 .transcription-editor-empty { margin: 0; padding: 13px; border: 1px dashed #45615f; border-radius: 8px; color: #b8ccc4; font-size: 12px; }
-.transcription-editor-scroll { max-height: 242px; overflow: auto; border: 1px solid #354e50; border-radius: 9px; scrollbar-color: #567a70 #1a2b2c; }
+.transcription-editor-scroll { max-width: 100%; max-height: 242px; overflow: auto; border: 1px solid #354e50; border-radius: 9px; scrollbar-color: #567a70 #1a2b2c; }
+.transcription-editor-scroll:focus-visible, .transcription-editor select:focus-visible, .transcription-editor input:focus-visible, .transcription-editor button:focus-visible { outline: 2px solid #f1edc6; outline-offset: 2px; }
 .transcription-editor table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 11px; }
 .transcription-editor th { position: sticky; top: 0; z-index: 1; padding: 8px; color: #a7c0b8; background: #21383a; font-size: 9px; font-weight: 800; letter-spacing: .09em; text-align: left; text-transform: uppercase; }
 .transcription-editor td { padding: 6px 7px; border-top: 1px solid #30484a; color: #e6efe6; }
@@ -14,9 +19,23 @@
 .transcription-index { color: #8baaa4 !important; font-weight: 750; }
 .transcription-position { white-space: nowrap; font-weight: 650; }
 .transcription-position small { display: block; margin-top: 2px; color: #91b4a3; font-size: 9px; }
-.transcription-editor select, .transcription-editor input { width: 100%; min-height: 40px; padding: 7px 6px; border: 1px solid #52706f; border-radius: 6px; color: #f3f6e9; background: #183237; font-size: 11px; }
+.transcription-editor select, .transcription-editor input { width: 100%; min-height: 44px; padding: 7px 6px; border: 1px solid #52706f; border-radius: 6px; color: #f3f6e9; background: #183237; font-size: 12px; }
 .transcription-editor input { width: 78px; }
 .transcription-editor select { min-width: 84px; }
-.transcription-delete { display: grid; place-items: center; width: 40px; height: 40px; padding: 0; border: 1px solid #755957; border-radius: 6px; color: #f3c8bd; background: #432e2e; font-size: 18px; line-height: 1; }
+.transcription-delete { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 1px solid #755957; border-radius: 6px; color: #f3c8bd; background: #432e2e; font-size: 18px; line-height: 1; }
 .transcription-delete:hover { background: #623a38; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (max-width: 650px) {
+  .transcription-editor-scroll { max-height: 370px; }
+  .transcription-editor table, .transcription-editor tbody { display: block; width: 100%; min-width: 0; }
+  .transcription-editor thead { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  .transcription-editor tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 10px; border-bottom: 1px solid #354e50; }
+  .transcription-editor tr:last-child { border-bottom: 0; }
+  .transcription-editor td { display: block; min-width: 0; padding: 0; border: 0; background: none !important; }
+  .transcription-editor td::before { content: attr(data-label); display: block; margin-bottom: 3px; color: #a7c0b8; font-size: 10px; font-weight: 750; }
+  .transcription-editor td:first-child { align-self: center; }
+  .transcription-editor td:first-child::before, .transcription-editor td:last-child::before { display: none; }
+  .transcription-editor td:last-child { justify-self: end; grid-column: 2; grid-row: 1; }
+  .transcription-editor select, .transcription-editor input { width: 100%; min-width: 0; }
+  .transcription-position { align-self: end; min-height: 44px; padding-top: 3px !important; }
+}

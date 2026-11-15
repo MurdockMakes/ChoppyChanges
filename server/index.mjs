@@ -85,6 +85,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     throw error;
   });
   server.listen(port, host, () => {
-    console.log(`Changes Coach server listening on http://${host}:${port}`);
+    console.log(`Resolve Labs server listening on http://${host}:${port}`);
   });
 }
